@@ -117,7 +117,7 @@ def ingest():
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT g.id, g.nome, g.ruolo, g.squadra, g.quotazione_attuale,
+                SELECT g.id, g.nome, g.ruolo, g.squadra, g.quotazione_attuale, g.fvm,
                        s.stagione, s.presenze, s.gol, s.assist, s.media_voto,
                        mr.prezzo_pagato
                 FROM giocatori g
@@ -135,6 +135,8 @@ def ingest():
             f"{r['nome']} ({r['ruolo']}, {r['squadra']}). "
             f"Quotazione attuale: {r['quotazione_attuale']}. "
         )
+        if r["fvm"] is not None:
+            testo += f"Fantavalore di mercato (FVM): {r['fvm']}. "
         if r["stagione"]:
             testo += (
                 f"Stagione {r['stagione']}: {r['presenze']} presenze, "

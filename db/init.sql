@@ -3,11 +3,13 @@
 -- Anagrafica giocatori
 CREATE TABLE IF NOT EXISTS giocatori (
     id SERIAL PRIMARY KEY,
+    fanta_id INTEGER UNIQUE, -- Id ufficiale usato nei listoni Fantacalcio, utile per aggiornamenti futuri
     nome TEXT NOT NULL,
     ruolo TEXT NOT NULL CHECK (ruolo IN ('P', 'D', 'C', 'A')),
     squadra TEXT NOT NULL,
     quotazione_iniziale NUMERIC,
     quotazione_attuale NUMERIC,
+    fvm NUMERIC, -- Fantavalore di Mercato, utile per orientarsi in asta
     creato_il TIMESTAMP DEFAULT now(),
     UNIQUE (nome, squadra)
 );

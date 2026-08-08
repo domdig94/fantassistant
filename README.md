@@ -58,9 +58,39 @@ Servizi esposti:
 - chroma:          http://localhost:8003
 - postgres:        localhost:5432
 
-## Primo giro (senza vision, per validare il motore RAG)
+## Import del listone ufficiale (xlsx)
 
-1. Prepara un CSV `nome,ruolo,squadra,quotazione` (anche pochi giocatori per test)
+Se hai il file ufficiale delle quotazioni (formato con fogli Tutti/Portieri/
+Difensori/Centrocampisti/Attaccanti/Ceduti, header alla seconda riga):
+
+```bash
+podman-compose up -d --build etl
+
+podman cp Quotazioni_Fantacalcio.xlsx fanta-etl:/app/listone.xlsx
+podman exec -it fanta-etl python import_quotazioni.py /app/listone.xlsx
+```
+
+Importa dal foglio "Tutti" per default (tutti i ruoli insieme, 400-500
+giocatori). Lo script fa upsert su (nome, squadra): rilanciarlo dopo un
+aggiornamento del listone (es. dopo il calciomercato) non crea duplicati,
+aggiorna solo i valori.
+
+Poi ricostruisci l'indice RAG e fai una domanda vera:
+
+```bash
+curl -X POST http://localhost:8000/ingest
+
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"domanda": "Chi sono i centrocampisti con FVM piu alto?"}'
+```
+
+## Test rapido con pochi dati (CSV a mano)
+
+Se invece vuoi solo verificare che il motore funzioni con pochi dati finti,
+senza usare il listone reale:
+
+1. Prepara un CSV `nome,ruolo,squadra,quotazione`
 2. Copialo nel container etl e importalo:
 
 ```bash
@@ -68,19 +98,7 @@ podman cp quotazioni.csv fanta-etl:/app/quotazioni.csv
 podman exec -it fanta-etl python import_csv.py /app/quotazioni.csv
 ```
 
-3. Costruisci l'indice RAG:
-
-```bash
-curl -X POST http://localhost:8000/ingest
-```
-
-4. Fai una domanda:
-
-```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"domanda": "Chi sono i centrocampisti piu economici?"}'
-```
+3. `/ingest` e `/chat` come sopra.
 
 ## Vision: prova rapida
 
