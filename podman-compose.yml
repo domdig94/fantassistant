@@ -1,0 +1,134 @@
+version: "3.9"
+
+networks:
+  fanta-net:
+    driver: bridge
+
+services:
+  postgres:
+    image: docker.io/postgres:16
+    container_name: fanta-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fantauser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fantapass}
+      POSTGRES_DB: ${POSTGRES_DB:-fantassistant}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fantauser} -d ${POSTGRES_DB:-fantassistant}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  chroma:
+    image: docker.io/chromadb/chroma:1.5.9
+    container_name: fanta-chroma
+    networks:
+      - fanta-net
+    restart: unless-stopped
+    ports:
+      - "8003:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "/bin/bash", "-c", "</dev/tcp/localhost/8000"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  chatbot:
+    build: ./services/chatbot
+    container_name: fanta-chatbot
+    networks:
+      - fanta-net
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chroma:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fantauser}:${POSTGRES_PASSWORD:-fantapass}@postgres:5432/${POSTGRES_DB:-fantassistant}
+      CHROMA_HOST: fanta-chroma
+      CHROMA_PORT: 8000
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-10-21}
+      AZURE_CHAT_DEPLOYMENT: ${AZURE_CHAT_DEPLOYMENT:-gpt-4.1}
+      HTTP_PROXY: ${HTTP_PROXY}
+      HTTPS_PROXY: ${HTTPS_PROXY}
+      http_proxy: ${http_proxy}
+      https_proxy: ${https_proxy}
+      NO_PROXY: ${NO_PROXY}
+      no_proxy: ${no_proxy}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./services/chatbot:/app:Z
+      - ./chroma_cache:/app/.cache:Z
+
+  vision:
+    build: ./services/vision
+    container_name: fanta-vision
+    networks:
+      - fanta-net
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fantauser}:${POSTGRES_PASSWORD:-fantapass}@postgres:5432/${POSTGRES_DB:-fantassistant}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+      AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-10-21}
+      AZURE_VISION_DEPLOYMENT: ${AZURE_VISION_DEPLOYMENT:-gpt-4.1}
+      HTTP_PROXY: ${HTTP_PROXY}
+      HTTPS_PROXY: ${HTTPS_PROXY}
+      http_proxy: ${http_proxy}
+      https_proxy: ${https_proxy}
+      NO_PROXY: ${NO_PROXY}
+      no_proxy: ${no_proxy}
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./services/vision:/app:Z
+
+  auction-tracker:
+    build: ./services/auction-tracker
+    container_name: fanta-auction
+    networks:
+      - fanta-net
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fantauser}:${POSTGRES_PASSWORD:-fantapass}@postgres:5432/${POSTGRES_DB:-fantassistant}
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./services/auction-tracker:/app:Z
+
+  etl:
+    build: ./services/etl
+    container_name: fanta-etl
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fantauser}:${POSTGRES_PASSWORD:-fantapass}@postgres:5432/${POSTGRES_DB:-fantassistant}
+    volumes:
+      - ./services/etl:/app:Z
+    # Servizio "one-shot" per ora: lo lanci a mano con podman exec / podman-compose run
+    # In futuro puoi trasformarlo in un cron container.
+    command: ["sleep", "infinity"]
+
+volumes:
+  pgdata:
+  chroma_data:
