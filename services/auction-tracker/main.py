@@ -9,20 +9,25 @@ import os
 import psycopg
 from psycopg.rows import dict_row
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 app = FastAPI(title="FantAssistant Auction Tracker")
 
+# Il frontend gira come pagina statica su un'origine diversa (nginx su
+# un'altra porta): serve CORS aperto per un tool interno d'uso personale.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 def get_conn():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
-
-
-class ImpostaBudget(BaseModel):
-    ruolo: str
-    budget_totale: float
 
 
 class RegistraAcquisto(BaseModel):
@@ -32,35 +37,51 @@ class RegistraAcquisto(BaseModel):
     e_mio: bool = False
     fonte: str = "manuale"
 
+class InitSquadre(BaseModel):
+    nomi: list[str]
+    budget_totale: float
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-@app.post("/budget")
-def imposta_budget(req: ImpostaBudget):
+@app.post("/squadre/init")
+def init_squadre(req: InitSquadre):
+    """Censimento iniziale: registra tutte le squadre della lega con lo
+    stesso budget di partenza. Rilanciabile senza duplicare (upsert)."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO budget_tracker (ruolo, budget_totale, budget_speso)
-                VALUES (%s, %s, 0)
-                """,
-                (req.ruolo, req.budget_totale),
-            )
+            for nome in req.nomi:
+                cur.execute(
+                    """
+                    INSERT INTO squadre (nome, budget_totale)
+                    VALUES (%s, %s)
+                    ON CONFLICT (nome) DO UPDATE SET budget_totale = EXCLUDED.budget_totale
+                    """,
+                    (nome.strip(), req.budget_totale),
+                )
             conn.commit()
-    return {"status": "ok"}
+    return {"status": "ok", "squadre_registrate": len(req.nomi)}
 
 
-@app.get("/budget")
-def leggi_budget():
+@app.get("/squadre")
+def lista_squadre():
+    """Budget totale, speso (somma da asta_log) e residuo per ogni squadra."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT ruolo, budget_totale, budget_speso FROM budget_tracker")
+            cur.execute("""
+                SELECT s.nome, s.budget_totale,
+                       COALESCE(SUM(a.prezzo_finale), 0) AS budget_speso
+                FROM squadre s
+                LEFT JOIN asta_log a ON a.squadra_acquirente = s.nome
+                GROUP BY s.nome, s.budget_totale
+                ORDER BY s.nome
+            """)
             righe = cur.fetchall()
     return {
-        "budget": [
+        "squadre": [
             {**r, "budget_residuo": float(r["budget_totale"]) - float(r["budget_speso"])}
             for r in righe
         ]
@@ -120,3 +141,42 @@ def giocatori_liberi(ruolo: str | None = None):
             cur.execute(query, params)
             righe = cur.fetchall()
     return {"giocatori_liberi": righe}
+
+
+@app.get("/cerca-giocatori")
+def cerca_giocatori(nome: str, solo_liberi: bool = True):
+    """Autocomplete per il form live: cerca per nome (match parziale),
+    di default solo tra i giocatori non ancora assegnati in asta."""
+    query = """
+        SELECT g.id, g.nome, g.ruolo, g.squadra, g.quotazione_attuale, g.fvm
+        FROM giocatori g
+        WHERE g.nome ILIKE %s
+    """
+    params = [f"%{nome}%"]
+    if solo_liberi:
+        query += " AND g.id NOT IN (SELECT giocatore_id FROM asta_log)"
+    query += " ORDER BY g.fvm DESC NULLS LAST LIMIT 10"
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            return {"risultati": cur.fetchall()}
+
+
+@app.get("/storico")
+def storico(limit: int = 20):
+    """Ultimi acquisti registrati, con nome giocatore, per il log live."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT a.id, g.nome, g.ruolo, g.squadra, a.prezzo_finale,
+                       a.squadra_acquirente, a.fonte, a.creato_il
+                FROM asta_log a
+                JOIN giocatori g ON g.id = a.giocatore_id
+                ORDER BY a.creato_il DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return {"storico": cur.fetchall()}

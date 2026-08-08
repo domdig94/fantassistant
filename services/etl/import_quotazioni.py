@@ -44,12 +44,13 @@ def import_listone(xlsx_path: str, foglio: str = "Tutti"):
                     """
                     INSERT INTO giocatori (fanta_id, nome, ruolo, squadra, quotazione_iniziale, quotazione_attuale, fvm)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (nome, squadra) DO UPDATE
-                    SET fanta_id = EXCLUDED.fanta_id,
+                    ON CONFLICT (fanta_id) DO UPDATE
+                    SET nome = EXCLUDED.nome,
                         ruolo = EXCLUDED.ruolo,
+                        squadra = EXCLUDED.squadra,          -- <--- Aggiorna la squadra se è cambiata!
                         quotazione_iniziale = EXCLUDED.quotazione_iniziale,
                         quotazione_attuale = EXCLUDED.quotazione_attuale,
-                        fvm = EXCLUDED.fvm
+                        fvm = EXCLUDED.fvm;
                     """,
                     (
                         int(row["Id"]),

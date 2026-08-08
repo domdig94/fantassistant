@@ -90,3 +90,11 @@ CREATE TABLE IF NOT EXISTS budget_tracker (
     budget_totale NUMERIC NOT NULL,
     budget_speso NUMERIC DEFAULT 0
 );
+
+-- Censimento squadre della lega, con budget totale (uguale per tutte all'inizio)
+CREATE TABLE IF NOT EXISTS squadre (
+    id SERIAL PRIMARY KEY,
+    nome TEXT NOT NULL UNIQUE,
+    budget_totale NUMERIC NOT NULL,
+    creato_il TIMESTAMP DEFAULT now()
+);
