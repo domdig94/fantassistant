@@ -239,6 +239,30 @@
   .chat-input-row { display: flex; gap: 8px; margin-top: 12px; }
   .chat-input-row input { flex: 1; }
   .chat-input-row button { width: auto; margin-top: 0; padding: 10px 18px; }
+
+  .storico-controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .storico-controls input { flex: 1; }
+  .storico-wrapper {
+    max-height: 340px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+  }
+  .storico-wrapper table { border: none; }
+  .storico-wrapper thead th {
+    position: sticky;
+    top: 0;
+    background: var(--panel-2);
+    cursor: pointer;
+    user-select: none;
+  }
+  .storico-wrapper thead th:hover { color: var(--text); }
+  .storico-wrapper thead th.sort-attivo { color: var(--pitch); }
+  .sort-arrow { font-size: 9px; margin-left: 3px; }
 </style>
 </head>
 <body>
@@ -278,12 +302,23 @@
 
   <div class="panel">
     <h2>Storico live</h2>
-    <table id="tabellaStorico">
-      <thead>
-        <tr><th>Giocatore</th><th>Ruolo</th><th>Prezzo</th><th>Squadra</th><th>Ora</th></tr>
-      </thead>
-      <tbody id="corpoStorico"></tbody>
-    </table>
+    <div class="storico-controls">
+      <input type="text" id="filtroStorico" placeholder="Filtra per giocatore o squadra..." autocomplete="off">
+    </div>
+    <div class="storico-wrapper">
+      <table id="tabellaStorico">
+        <thead>
+          <tr>
+            <th data-campo="nome">Giocatore<span class="sort-arrow"></span></th>
+            <th data-campo="ruolo">Ruolo<span class="sort-arrow"></span></th>
+            <th data-campo="prezzo_finale">Prezzo<span class="sort-arrow"></span></th>
+            <th data-campo="squadra_acquirente">Squadra<span class="sort-arrow"></span></th>
+            <th data-campo="creato_il">Ora<span class="sort-arrow"></span></th>
+          </tr>
+        </thead>
+        <tbody id="corpoStorico"></tbody>
+      </table>
+    </div>
     <div class="vuoto" id="vuoto" style="display:none;">Ancora nessun acquisto registrato</div>
   </div>
 </main>
@@ -344,19 +379,44 @@
     }
   }
 
+  let storicoCompleto = [];
+  let ordinamento = { campo: 'creato_il', direzione: 'desc' };
+
   async function caricaStorico() {
     try {
-      const res = await fetch(`${API}/storico?limit=20`);
+      const res = await fetch(`${API}/storico?limit=100`);
       const data = await res.json();
-      const corpo = document.getElementById('corpoStorico');
-      const vuoto = document.getElementById('vuoto');
-      corpo.innerHTML = '';
-      if (!data.storico.length) {
-        vuoto.style.display = 'block';
-        return;
-      }
+      storicoCompleto = data.storico;
+      document.getElementById('status').textContent = `connesso — ${storicoCompleto.length} acquisti`;
+      renderStorico();
+    } catch (e) {
+      document.getElementById('status').textContent = 'backend non raggiungibile';
+    }
+  }
+
+  function renderStorico() {
+    const filtro = document.getElementById('filtroStorico').value.trim().toLowerCase();
+    let righe = storicoCompleto.filter(s =>
+      !filtro || s.nome.toLowerCase().includes(filtro) || s.squadra_acquirente.toLowerCase().includes(filtro)
+    );
+
+    righe.sort((a, b) => {
+      let va = a[ordinamento.campo], vb = b[ordinamento.campo];
+      if (ordinamento.campo === 'prezzo_finale') { va = Number(va); vb = Number(vb); }
+      if (va < vb) return ordinamento.direzione === 'asc' ? -1 : 1;
+      if (va > vb) return ordinamento.direzione === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    const corpo = document.getElementById('corpoStorico');
+    const vuoto = document.getElementById('vuoto');
+    corpo.innerHTML = '';
+
+    if (!righe.length) {
+      vuoto.style.display = 'block';
+    } else {
       vuoto.style.display = 'none';
-      data.storico.forEach(s => {
+      righe.forEach(s => {
         const ora = new Date(s.creato_il).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -368,11 +428,33 @@
         `;
         corpo.appendChild(tr);
       });
-      document.getElementById('status').textContent = `connesso — ${data.storico.length} acquisti`;
-    } catch (e) {
-      document.getElementById('status').textContent = 'backend non raggiungibile';
     }
+
+    document.querySelectorAll('.storico-wrapper th').forEach(th => {
+      const arrow = th.querySelector('.sort-arrow');
+      if (th.dataset.campo === ordinamento.campo) {
+        th.classList.add('sort-attivo');
+        arrow.textContent = ordinamento.direzione === 'asc' ? '▲' : '▼';
+      } else {
+        th.classList.remove('sort-attivo');
+        arrow.textContent = '';
+      }
+    });
   }
+
+  document.querySelectorAll('.storico-wrapper th').forEach(th => {
+    th.addEventListener('click', () => {
+      const campo = th.dataset.campo;
+      if (ordinamento.campo === campo) {
+        ordinamento.direzione = ordinamento.direzione === 'asc' ? 'desc' : 'asc';
+      } else {
+        ordinamento = { campo, direzione: 'asc' };
+      }
+      renderStorico();
+    });
+  });
+
+  document.getElementById('filtroStorico').addEventListener('input', renderStorico);
 
   document.getElementById('ricerca').addEventListener('input', (e) => {
     clearTimeout(timerRicerca);

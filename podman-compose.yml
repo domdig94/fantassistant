@@ -13,6 +13,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-fantauser}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fantapass}
       POSTGRES_DB: ${POSTGRES_DB:-fantassistant}
+      TZ: Europe/Rome
+      PGTZ: Europe/Rome
     ports:
       - "5432:5432"
     volumes:

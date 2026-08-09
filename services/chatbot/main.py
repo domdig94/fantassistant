@@ -307,14 +307,19 @@ def esegui_mio_budget():
                        COALESCE(SUM(a.prezzo_finale), 0) AS budget_speso
                 FROM squadre s
                 LEFT JOIN asta_log a ON a.squadra_acquirente = s.nome
-                WHERE s.nome = %s
+                WHERE LOWER(s.nome) = LOWER(%s)
                 GROUP BY s.nome, s.budget_totale
                 """,
                 (MY_TEAM,),
             )
             r = cur.fetchone()
     if not r:
-        return {"errore": f"Squadra '{MY_TEAM}' non censita"}
+        return {
+            "errore": (
+                f"Squadra '{MY_TEAM}' (da MY_TEAM) non trovata in squadre. "
+                f"Verifica il censimento con GET /squadre su auction-tracker."
+            )
+        }
     return {
         "budget_totale": float(r["budget_totale"]),
         "budget_speso": float(r["budget_speso"]),
@@ -371,13 +376,20 @@ def esegui_strategia_asta():
                        COALESCE(SUM(a.prezzo_finale), 0) AS budget_speso
                 FROM squadre s
                 LEFT JOIN asta_log a ON a.squadra_acquirente = s.nome
-                WHERE s.nome = %s
+                WHERE LOWER(s.nome) = LOWER(%s)
                 GROUP BY s.budget_totale
                 """,
                 (MY_TEAM,),
             )
             row = cur.fetchone()
-            budget_residuo = float(row["budget_totale"]) - float(row["budget_speso"]) if row else 0.0
+            if not row:
+                return {
+                    "errore": (
+                        f"Squadra '{MY_TEAM}' non trovata in squadre. "
+                        f"Verifica il censimento."
+                    )
+                }
+            budget_residuo = float(row["budget_totale"]) - float(row["budget_speso"])
 
             cur.execute(
                 """
