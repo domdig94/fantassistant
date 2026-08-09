@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS asta_log (
 CREATE TABLE IF NOT EXISTS squadre (
     id SERIAL PRIMARY KEY,
     nome TEXT NOT NULL UNIQUE,
+    allenatore TEXT,
     budget_totale NUMERIC NOT NULL,
     creato_il TIMESTAMP DEFAULT now()
 );

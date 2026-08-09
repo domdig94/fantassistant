@@ -41,6 +41,13 @@ client_ai = AzureOpenAI(
 CHAT_DEPLOYMENT = os.environ.get("AZURE_CHAT_DEPLOYMENT", "gpt-4.1")
 MY_TEAM = os.environ.get("MY_TEAM", "Io")
 
+ROSA_TARGET = {
+    "P": int(os.environ.get("ROSA_TARGET_P", 3)),
+    "D": int(os.environ.get("ROSA_TARGET_D", 8)),
+    "C": int(os.environ.get("ROSA_TARGET_C", 8)),
+    "A": int(os.environ.get("ROSA_TARGET_A", 6)),
+}
+
 
 # Inizializziamo l'embedding function una sola volta fuori o dentro la funzione
 _embedding_fn = None
@@ -172,23 +179,71 @@ TOOL_ROSA = {
     },
 }
 
-TOOLS_ASTA = TOOLS_BASE + [TOOL_BUDGET, TOOL_ROSA]
-TOOLS_GENERALE = TOOLS_BASE + [TOOL_ROSA]
+TOOL_ROSA_ALTRUI = {
+    "type": "function",
+    "function": {
+        "name": "rosa_di_squadra",
+        "description": (
+            "Ritorna l'elenco ESATTO dei giocatori acquistati da una "
+            "squadra specifica della lega (non la mia), preso da "
+            "asta_log che contiene tutti gli acquisti di tutti. Usa "
+            "questo strumento per domande tipo 'chi ha in rosa X', "
+            "'cosa ha preso la squadra Y'. NON usare la_mia_rosa per "
+            "questo (quella e' solo per la mia squadra)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "nome_squadra": {"type": "string", "description": "Nome della squadra o nome dell'allenatore di cui vedere gli acquisti."},
+            },
+            "required": ["nome_squadra"],
+        },
+    },
+}
+
+TOOL_STRATEGIA = {
+    "type": "function",
+    "function": {
+        "name": "strategia_asta",
+        "description": (
+            "Ritorna una fotografia completa della mia situazione in asta: "
+            "slot ancora da riempire per ruolo, budget residuo, budget medio "
+            "disponibile per ogni slot ancora da riempire, i migliori "
+            "candidati liberi per ogni ruolo mancante, e se il mercato sta "
+            "pagando sopra o sotto l'FVM per ciascun ruolo. Usa questo "
+            "strumento quando l'utente chiede una strategia generale, "
+            "'come sono messo', 'cosa mi manca', 'su chi punto ora', o "
+            "consigli complessivi (non su un singolo giocatore)."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+TOOLS_ASTA = TOOLS_BASE + [TOOL_BUDGET, TOOL_ROSA, TOOL_ROSA_ALTRUI, TOOL_STRATEGIA]
+TOOLS_GENERALE = TOOLS_BASE + [TOOL_ROSA, TOOL_ROSA_ALTRUI]
 
 SYSTEM_PROMPT_ASTA = (
-    "Sei un assistente esperto di Fantacalcio, in asta live. Hai quattro "
+    "Sei un assistente esperto di Fantacalcio, in asta live. Hai sei "
     "strumenti: uno per query strutturate su giocatori (ordinamenti/"
     "filtri/top-N, di default solo tra i liberi), uno per ricerca "
     "semantica (domande aperte), uno per sapere il MIO budget "
-    "residuo, uno per sapere la MIA rosa attuale. Quando l'utente chiede "
-    "consigli su chi prendere, controlla SEMPRE prima il budget residuo "
-    "con lo strumento dedicato, poi cerca giocatori liberi compatibili "
-    "con quel budget. Per 'chi ha il valore piu alto/basso' o 'top N' usa "
-    "SEMPRE lo strumento SQL, mai la ricerca semantica. Per domande sulla "
-    "mia rosa/squadra usa SEMPRE lo strumento la_mia_rosa, mai la ricerca "
-    "semantica - quella puo' restituire giocatori a caso. Rispondi SOLO "
-    "in base ai risultati degli strumenti, mai inventando dati. Se i "
-    "risultati non bastano, dillo."
+    "residuo, uno per sapere la MIA rosa attuale, uno per la rosa di "
+    "ALTRE squadre della lega, uno per una fotografia completa della mia "
+    "situazione in asta (slot mancanti per ruolo, budget medio per slot, "
+    "candidati liberi, andamento mercato). Quando l'utente chiede "
+    "consigli su chi prendere per un singolo acquisto, controlla SEMPRE "
+    "prima il budget residuo con lo strumento dedicato, poi cerca "
+    "giocatori liberi compatibili con quel budget. Per domande di "
+    "strategia generale ('come sono messo', 'cosa mi manca', 'su chi "
+    "punto ora') usa strategia_asta, che da' gia' tutto il quadro in una "
+    "sola chiamata - non serve comporlo con altri strumenti. Per 'chi ha "
+    "il valore piu alto/basso' o 'top N' usa SEMPRE lo strumento SQL, mai "
+    "la ricerca semantica. Per la mia rosa/squadra usa SEMPRE lo "
+    "strumento la_mia_rosa; per la rosa di ALTRE squadre della lega usa "
+    "SEMPRE rosa_di_squadra, mai la_mia_rosa ne' la ricerca semantica - "
+    "quella puo' restituire giocatori a caso. Rispondi SOLO in base ai "
+    "risultati degli strumenti, mai inventando dati. Se i risultati non "
+    "bastano, dillo. "
     "Non annunciare MAI un'azione futura (es. 'ora cerco', 'un attimo', 'ci "
     "penso') senza eseguirla nella stessa risposta: o chiami subito lo "
     "strumento giusto e rispondi con il risultato, oppure rispondi "
@@ -198,16 +253,17 @@ SYSTEM_PROMPT_ASTA = (
 SYSTEM_PROMPT_GENERALE = (
     "Sei un assistente esperto di Fantacalcio, per la gestione della "
     "squadra durante il campionato (formazioni, statistiche, chi "
-    "schierare, confronti tra giocatori). Hai tre strumenti: uno per "
+    "schierare, confronti tra giocatori). Hai quattro strumenti: uno per "
     "query strutturate (ordinamenti/filtri/top-N su dati esatti), uno "
     "per ricerca semantica (domande aperte o su un giocatore specifico), "
-    "uno per sapere la MIA rosa attuale. Per 'chi ha il valore piu alto/"
-    "basso' o 'top N' usa SEMPRE lo strumento SQL, mai la ricerca "
-    "semantica. Per domande sulla mia rosa/squadra usa SEMPRE lo "
-    "strumento la_mia_rosa, mai la ricerca semantica - quella puo' "
-    "restituire giocatori a caso. Rispondi SOLO in base ai risultati "
-    "degli strumenti, mai inventando dati. Se i risultati non bastano, "
-    "dillo."
+    "uno per sapere la MIA rosa attuale, uno per la rosa di ALTRE "
+    "squadre della lega. Per 'chi ha il valore piu alto/basso' o 'top N' "
+    "usa SEMPRE lo strumento SQL, mai la ricerca semantica. Per la mia "
+    "rosa/squadra usa SEMPRE lo strumento la_mia_rosa; per la rosa di "
+    "ALTRE squadre della lega usa SEMPRE rosa_di_squadra, mai "
+    "la_mia_rosa ne' la ricerca semantica - quella puo' restituire "
+    "giocatori a caso. Rispondi SOLO in base ai risultati degli "
+    "strumenti, mai inventando dati. Se i risultati non bastano, dillo. "
     "Non annunciare MAI un'azione futura (es. 'ora cerco', 'un attimo', 'ci "
     "penso') senza eseguirla nella stessa risposta: o chiami subito lo "
     "strumento giusto e rispondi con il risultato, oppure rispondi "
@@ -279,6 +335,121 @@ def esegui_mia_rosa():
             )
             return cur.fetchall()
         
+
+def esegui_rosa_di_squadra(nome_squadra: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT g.nome, g.ruolo, g.squadra, a.prezzo_finale
+                FROM asta_log a
+                JOIN giocatori g ON g.id = a.giocatore_id
+                JOIN squadre s ON s.nome = a.squadra_acquirente
+                WHERE s.nome ILIKE %s OR s.allenatore ILIKE %s
+                ORDER BY g.ruolo, g.nome
+                """,
+                (f"%{nome_squadra}%", f"%{nome_squadra}%"),
+            )
+            return cur.fetchall()
+        
+
+def esegui_strategia_asta():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT g.ruolo, COUNT(*) AS presi
+                FROM mia_rosa mr JOIN giocatori g ON g.id = mr.giocatore_id
+                GROUP BY g.ruolo
+                """
+            )
+            presi_per_ruolo = {r["ruolo"]: r["presi"] for r in cur.fetchall()}
+
+            cur.execute(
+                """
+                SELECT s.budget_totale,
+                       COALESCE(SUM(a.prezzo_finale), 0) AS budget_speso
+                FROM squadre s
+                LEFT JOIN asta_log a ON a.squadra_acquirente = s.nome
+                WHERE s.nome = %s
+                GROUP BY s.budget_totale
+                """,
+                (MY_TEAM,),
+            )
+            row = cur.fetchone()
+            budget_residuo = float(row["budget_totale"]) - float(row["budget_speso"]) if row else 0.0
+
+            cur.execute(
+                """
+                SELECT g.ruolo, AVG(a.prezzo_finale) AS prezzo_medio,
+                       AVG(g.fvm) AS fvm_medio, COUNT(*) AS n_acquisti
+                FROM asta_log a JOIN giocatori g ON g.id = a.giocatore_id
+                GROUP BY g.ruolo
+                """
+            )
+            mercato = {}
+            for r in cur.fetchall():
+                fvm_medio = float(r["fvm_medio"] or 0)
+                prezzo_medio = float(r["prezzo_medio"] or 0)
+                rapporto = (prezzo_medio / fvm_medio) if fvm_medio > 0 else None
+                if rapporto is None:
+                    valutazione = "dati insufficienti"
+                elif rapporto > 1.15:
+                    valutazione = "gonfiato (si paga sopra FVM)"
+                elif rapporto < 0.85:
+                    valutazione = "conveniente (si paga sotto FVM)"
+                else:
+                    valutazione = "in linea con FVM"
+                mercato[r["ruolo"]] = {
+                    "prezzo_medio_pagato": round(prezzo_medio, 1),
+                    "fvm_medio": round(fvm_medio, 1),
+                    "valutazione": valutazione,
+                    "campione": r["n_acquisti"],
+                }
+
+            slot_mancanti = {
+                ruolo: max(target - presi_per_ruolo.get(ruolo, 0), 0)
+                for ruolo, target in ROSA_TARGET.items()
+            }
+            totale_slot_mancanti = sum(slot_mancanti.values())
+            budget_medio_per_slot = (
+                round(budget_residuo / totale_slot_mancanti, 1) if totale_slot_mancanti else 0
+            )
+
+            candidati_per_ruolo = {}
+            for ruolo, mancanti in slot_mancanti.items():
+                if mancanti == 0:
+                    continue
+                cur.execute(
+                    """
+                    SELECT nome, squadra, quotazione_attuale, fvm
+                    FROM giocatori
+                    WHERE ruolo = %s AND id NOT IN (SELECT giocatore_id FROM asta_log)
+                    ORDER BY fvm DESC NULLS LAST
+                    LIMIT 5
+                    """,
+                    (ruolo,),
+                )
+                candidati_per_ruolo[ruolo] = cur.fetchall()
+
+    return {
+        "budget_residuo": budget_residuo,
+        "budget_medio_per_slot_rimanente": budget_medio_per_slot,
+        "rosa": {
+            ruolo: {
+                "richiesti": ROSA_TARGET[ruolo],
+                "presi": presi_per_ruolo.get(ruolo, 0),
+                "mancanti": slot_mancanti[ruolo],
+            }
+            for ruolo in ROSA_TARGET
+        },
+        "andamento_mercato_per_ruolo": mercato,
+        "top_candidati_per_ruolo": {
+            ruolo: [dict(c) for c in candidati]
+            for ruolo, candidati in candidati_per_ruolo.items()
+        },
+    }
+
 
 def esegui_ricerca_semantica(query: str, top_k: int = 8):
     risultati = get_collection().query(query_texts=[query], n_results=top_k)
@@ -416,6 +587,19 @@ def chat(req: ChatRequest):
                     )
                 else:
                     contesto_usato.append("Nessun giocatore ancora in rosa.")
+            elif tool_call.function.name == "rosa_di_squadra":
+                righe = esegui_rosa_di_squadra(**args)
+                risultato = [dict(r) for r in righe]
+                if risultato:
+                    contesto_usato.extend(
+                        f"{r['nome']} ({r['ruolo']}, {r['squadra']}), pagato {r['prezzo_finale']}"
+                        for r in risultato
+                    )
+                else:
+                    contesto_usato.append("Nessun acquisto trovato per quella squadra.")
+            elif tool_call.function.name == "strategia_asta":
+                risultato = esegui_strategia_asta()
+                contesto_usato.append(json.dumps(risultato, default=str, ensure_ascii=False))
             else:
                 risultato = []
 

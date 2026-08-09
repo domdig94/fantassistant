@@ -37,8 +37,12 @@ class RegistraAcquisto(BaseModel):
     e_mio: bool = False
     fonte: str = "manuale"
 
+class SquadraInit(BaseModel):
+    nome: str
+    allenatore: str | None = None
+    
 class InitSquadre(BaseModel):
-    nomi: list[str]
+    squadre: list[SquadraInit]
     budget_totale: float
 
 
@@ -53,30 +57,31 @@ def init_squadre(req: InitSquadre):
     stesso budget di partenza. Rilanciabile senza duplicare (upsert)."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            for nome in req.nomi:
+            for s in req.squadre:
                 cur.execute(
                     """
-                    INSERT INTO squadre (nome, budget_totale)
-                    VALUES (%s, %s)
-                    ON CONFLICT (nome) DO UPDATE SET budget_totale = EXCLUDED.budget_totale
+                    INSERT INTO squadre (nome, allenatore, budget_totale)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (nome) DO UPDATE
+                    SET allenatore = EXCLUDED.allenatore,
+                        budget_totale = EXCLUDED.budget_totale
                     """,
-                    (nome.strip(), req.budget_totale),
+                    (s.nome.strip(), s.allenatore.strip(), req.budget_totale),
                 )
             conn.commit()
-    return {"status": "ok", "squadre_registrate": len(req.nomi)}
+    return {"status": "ok", "squadre_registrate": len(req.squadre)}
 
 
 @app.get("/squadre")
 def lista_squadre():
-    """Budget totale, speso (somma da asta_log) e residuo per ogni squadra."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT s.nome, s.budget_totale,
+                SELECT s.nome, s.allenatore, s.budget_totale,
                        COALESCE(SUM(a.prezzo_finale), 0) AS budget_speso
                 FROM squadre s
                 LEFT JOIN asta_log a ON a.squadra_acquirente = s.nome
-                GROUP BY s.nome, s.budget_totale
+                GROUP BY s.nome, s.allenatore, s.budget_totale
                 ORDER BY s.nome
             """)
             righe = cur.fetchall()

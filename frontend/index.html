@@ -440,7 +440,10 @@
           fonte: 'manuale',
         }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.detail || `HTTP ${res.status}`);
+      }
 
       msg.textContent = `✓ ${giocatoreSelezionato.nome} registrato`;
       msg.className = 'msg ok';
