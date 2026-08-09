@@ -25,6 +25,7 @@ import psycopg
 from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2
 from psycopg.rows import dict_row
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import AzureOpenAI
 
@@ -38,6 +39,7 @@ client_ai = AzureOpenAI(
     api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
 )
 CHAT_DEPLOYMENT = os.environ.get("AZURE_CHAT_DEPLOYMENT", "gpt-4.1")
+MY_TEAM = os.environ.get("MY_TEAM", "Io")
 
 
 # Inizializziamo l'embedding function una sola volta fuori o dentro la funzione
@@ -91,7 +93,7 @@ def get_conn():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
 
-TOOLS = [
+TOOLS_BASE = [
     {
         "type": "function",
         "function": {
@@ -107,29 +109,13 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "ruolo": {
-                        "type": "string",
-                        "enum": ["P", "D", "C", "A"],
-                        "description": "Filtra per ruolo. Omettere per tutti i ruoli.",
-                    },
-                    "squadra": {
-                        "type": "string",
-                        "description": "Filtra per squadra (match parziale). Omettere per tutte.",
-                    },
-                    "order_by": {
-                        "type": "string",
-                        "enum": list(COLONNE_ORDINABILI.keys()),
-                        "description": "Campo su cui ordinare.",
-                    },
-                    "ordine": {
-                        "type": "string",
-                        "enum": ["asc", "desc"],
-                        "description": "asc = dal piu basso, desc = dal piu alto.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Numero massimo di risultati (default 10, max 50).",
-                    },
+                    "ruolo": {"type": "string", "enum": ["P", "D", "C", "A"], "description": "Filtra per ruolo. Omettere per tutti i ruoli."},
+                    "squadra": {"type": "string", "description": "Filtra per squadra (match parziale). Omettere per tutte."},
+                    "escludi_squadra": {"type": "string","description": "Escludi questa squadra dai risultati."},
+                    "order_by": {"type": "string", "enum": list(COLONNE_ORDINABILI.keys()), "description": "Campo su cui ordinare."},
+                    "ordine": {"type": "string", "enum": ["asc", "desc"], "description": "asc = dal piu basso, desc = dal piu alto."},
+                    "limit": {"type": "integer", "description": "Numero massimo di risultati (default 10, max 50)."},
+                    "solo_liberi": {"type": "boolean", "description": "Se true (default), esclude i giocatori gia' assegnati in asta."},
                 },
                 "required": ["order_by", "ordine"],
             },
@@ -157,17 +143,84 @@ TOOLS = [
     },
 ]
 
+TOOL_BUDGET = {
+    "type": "function",
+    "function": {
+        "name": "stato_mio_budget",
+        "description": (
+            "Ritorna il budget totale, speso e residuo della MIA squadra "
+            "in questo momento dell'asta. Usa questo strumento ogni volta "
+            "che l'utente chiede consigli su cosa conviene prendere, per "
+            "sapere quanto puo' davvero spendere."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
 
-def esegui_cerca_giocatori_sql(ruolo=None, squadra=None, order_by="fvm", ordine="desc", limit=10):
+TOOL_ROSA = {
+    "type": "function",
+    "function": {
+        "name": "la_mia_rosa",
+        "description": (
+            "Ritorna l'elenco ESATTO dei giocatori attualmente nella MIA "
+            "rosa, presi dal database (non da similarita' testuale). Usa "
+            "SEMPRE questo strumento per domande tipo 'chi ho in rosa', "
+            "'quale e' la mia squadra', 'cosa ho preso finora'. Mai la "
+            "ricerca semantica per questo tipo di domanda."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+TOOLS_ASTA = TOOLS_BASE + [TOOL_BUDGET, TOOL_ROSA]
+TOOLS_GENERALE = TOOLS_BASE + [TOOL_ROSA]
+
+SYSTEM_PROMPT_ASTA = (
+    "Sei un assistente esperto di Fantacalcio, in asta live. Hai quattro "
+    "strumenti: uno per query strutturate su giocatori (ordinamenti/"
+    "filtri/top-N, di default solo tra i liberi), uno per ricerca "
+    "semantica (domande aperte), uno per sapere il MIO budget "
+    "residuo, uno per sapere la MIA rosa attuale. Quando l'utente chiede "
+    "consigli su chi prendere, controlla SEMPRE prima il budget residuo "
+    "con lo strumento dedicato, poi cerca giocatori liberi compatibili "
+    "con quel budget. Per 'chi ha il valore piu alto/basso' o 'top N' usa "
+    "SEMPRE lo strumento SQL, mai la ricerca semantica. Per domande sulla "
+    "mia rosa/squadra usa SEMPRE lo strumento la_mia_rosa, mai la ricerca "
+    "semantica - quella puo' restituire giocatori a caso. Rispondi SOLO "
+    "in base ai risultati degli strumenti, mai inventando dati. Se i "
+    "risultati non bastano, dillo."
+    "Non annunciare MAI un'azione futura (es. 'ora cerco', 'un attimo', 'ci "
+    "penso') senza eseguirla nella stessa risposta: o chiami subito lo "
+    "strumento giusto e rispondi con il risultato, oppure rispondi "
+    "direttamente. Mai lasciare una richiesta a meta'."
+)
+
+SYSTEM_PROMPT_GENERALE = (
+    "Sei un assistente esperto di Fantacalcio, per la gestione della "
+    "squadra durante il campionato (formazioni, statistiche, chi "
+    "schierare, confronti tra giocatori). Hai tre strumenti: uno per "
+    "query strutturate (ordinamenti/filtri/top-N su dati esatti), uno "
+    "per ricerca semantica (domande aperte o su un giocatore specifico), "
+    "uno per sapere la MIA rosa attuale. Per 'chi ha il valore piu alto/"
+    "basso' o 'top N' usa SEMPRE lo strumento SQL, mai la ricerca "
+    "semantica. Per domande sulla mia rosa/squadra usa SEMPRE lo "
+    "strumento la_mia_rosa, mai la ricerca semantica - quella puo' "
+    "restituire giocatori a caso. Rispondi SOLO in base ai risultati "
+    "degli strumenti, mai inventando dati. Se i risultati non bastano, "
+    "dillo."
+    "Non annunciare MAI un'azione futura (es. 'ora cerco', 'un attimo', 'ci "
+    "penso') senza eseguirla nella stessa risposta: o chiami subito lo "
+    "strumento giusto e rispondi con il risultato, oppure rispondi "
+    "direttamente. Mai lasciare una richiesta a meta'."
+)
+
+
+def esegui_cerca_giocatori_sql(ruolo=None, squadra=None, escludi_squadra=None, order_by="fvm", ordine="desc", limit=10, solo_liberi=True):
     colonna = COLONNE_ORDINABILI.get(order_by, "fvm")
     direzione = "ASC" if ordine == "asc" else "DESC"
     limit = min(int(limit or 10), 50)
 
-    query = f"""
-        SELECT nome, ruolo, squadra, quotazione_attuale, fvm
-        FROM giocatori
-        WHERE 1=1
-    """
+    query = "SELECT nome, ruolo, squadra, quotazione_attuale, fvm FROM giocatori WHERE 1=1"
     params = []
     if ruolo:
         query += " AND ruolo = %s"
@@ -175,6 +228,11 @@ def esegui_cerca_giocatori_sql(ruolo=None, squadra=None, order_by="fvm", ordine=
     if squadra:
         query += " AND squadra ILIKE %s"
         params.append(f"%{squadra}%")
+    if escludi_squadra:
+        query += " AND squadra NOT ILIKE %s"
+        params.append(f"%{escludi_squadra}%")
+    if solo_liberi:
+        query += " AND id NOT IN (SELECT giocatore_id FROM asta_log)"
     query += f" ORDER BY {colonna} {direzione} NULLS LAST LIMIT %s"
     params.append(limit)
 
@@ -184,6 +242,44 @@ def esegui_cerca_giocatori_sql(ruolo=None, squadra=None, order_by="fvm", ordine=
             return cur.fetchall()
 
 
+def esegui_mio_budget():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT s.nome, s.budget_totale,
+                       COALESCE(SUM(a.prezzo_finale), 0) AS budget_speso
+                FROM squadre s
+                LEFT JOIN asta_log a ON a.squadra_acquirente = s.nome
+                WHERE s.nome = %s
+                GROUP BY s.nome, s.budget_totale
+                """,
+                (MY_TEAM,),
+            )
+            r = cur.fetchone()
+    if not r:
+        return {"errore": f"Squadra '{MY_TEAM}' non censita"}
+    return {
+        "budget_totale": float(r["budget_totale"]),
+        "budget_speso": float(r["budget_speso"]),
+        "budget_residuo": float(r["budget_totale"]) - float(r["budget_speso"]),
+    }
+
+
+def esegui_mia_rosa():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT g.nome, g.ruolo, g.squadra, mr.prezzo_pagato
+                FROM mia_rosa mr
+                JOIN giocatori g ON g.id = mr.giocatore_id
+                ORDER BY g.ruolo, g.nome
+                """
+            )
+            return cur.fetchall()
+        
+
 def esegui_ricerca_semantica(query: str, top_k: int = 8):
     risultati = get_collection().query(query_texts=[query], n_results=top_k)
     return risultati["documents"][0] if risultati["documents"] else []
@@ -191,10 +287,19 @@ def esegui_ricerca_semantica(query: str, top_k: int = 8):
 
 app = FastAPI(title="FantAssistant Chatbot")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 class ChatRequest(BaseModel):
     domanda: str
     top_k: int = 8
+    modalita: str = "asta"   # "asta" | "generale"
+    storico: list[dict] = []  # [{"role": "user"|"assistant", "content": "..."}]
 
 
 class ChatResponse(BaseModel):
@@ -257,22 +362,14 @@ def ingest():
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "Sei un assistente esperto di Fantacalcio. Hai due strumenti: "
-                "uno per query strutturate (ordinamenti/filtri/top-N su dati "
-                "esatti) e uno per ricerca semantica (domande aperte o su un "
-                "giocatore specifico). Scegli quello giusto in base alla "
-                "domanda - per 'chi ha il valore piu alto/basso' o 'top N' "
-                "usa SEMPRE lo strumento SQL, mai la ricerca semantica. "
-                "Rispondi SOLO in base ai risultati degli strumenti, mai "
-                "inventando dati. Se i risultati non bastano, dillo."
-            ),
-        },
-        {"role": "user", "content": req.domanda},
-    ]
+    tools = TOOLS_ASTA if req.modalita == "asta" else TOOLS_GENERALE
+    system_prompt = SYSTEM_PROMPT_ASTA if req.modalita == "asta" else SYSTEM_PROMPT_GENERALE
+
+    messages = (
+        [{"role": "system", "content": system_prompt}]
+        + req.storico
+        + [{"role": "user", "content": req.domanda}]
+    )
 
     contesto_usato: list[str] = []
 
@@ -280,7 +377,7 @@ def chat(req: ChatRequest):
     resp = client_ai.chat.completions.create(
         model=CHAT_DEPLOYMENT,
         messages=messages,
-        tools=TOOLS,
+        tools=tools,
         tool_choice="auto",
         temperature=0.1,
     )
@@ -304,6 +401,21 @@ def chat(req: ChatRequest):
                     args.get("query", req.domanda), args.get("top_k", req.top_k)
                 )
                 contesto_usato.extend(risultato)
+            elif tool_call.function.name == "stato_mio_budget":
+                risultato = esegui_mio_budget()
+                contesto_usato.append(
+                    f"Mio budget: {risultato.get('budget_residuo')} residui su {risultato.get('budget_totale')}"
+                )
+            elif tool_call.function.name == "la_mia_rosa":
+                righe = esegui_mia_rosa()
+                risultato = [dict(r) for r in righe]
+                if risultato:
+                    contesto_usato.extend(
+                        f"{r['nome']} ({r['ruolo']}, {r['squadra']}), pagato {r['prezzo_pagato']}"
+                        for r in risultato
+                    )
+                else:
+                    contesto_usato.append("Nessun giocatore ancora in rosa.")
             else:
                 risultato = []
 

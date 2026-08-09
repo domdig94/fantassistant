@@ -92,6 +92,37 @@ def lista_squadre():
 def registra_acquisto(req: RegistraAcquisto):
     with get_conn() as conn:
         with conn.cursor() as cur:
+            # Verifica che la squadra sia censita e ricava il budget residuo
+            # prima di scrivere qualsiasi cosa - controllo bloccante, non solo
+            # un warning: durante un'asta vera un errore qui e' irreversibile.
+            cur.execute(
+                """
+                SELECT s.budget_totale,
+                       COALESCE(SUM(a.prezzo_finale), 0) AS budget_speso
+                FROM squadre s
+                LEFT JOIN asta_log a ON a.squadra_acquirente = s.nome
+                WHERE s.nome = %s
+                GROUP BY s.budget_totale
+                """,
+                (req.squadra_acquirente,),
+            )
+            squadra = cur.fetchone()
+
+            if not squadra:
+                raise HTTPException(
+                    400,
+                    f"Squadra '{req.squadra_acquirente}' non censita. "
+                    f"Registrala prima con POST /squadre/init.",
+                )
+
+            residuo = float(squadra["budget_totale"]) - float(squadra["budget_speso"])
+            if req.prezzo_finale > residuo:
+                raise HTTPException(
+                    400,
+                    f"Budget insufficiente per '{req.squadra_acquirente}': "
+                    f"residuo {residuo}, richiesti {req.prezzo_finale}.",
+                )
+
             cur.execute(
                 """
                 INSERT INTO asta_log (giocatore_id, prezzo_finale, squadra_acquirente, fonte)
@@ -113,14 +144,7 @@ def registra_acquisto(req: RegistraAcquisto):
                     """,
                     (req.giocatore_id, req.prezzo_finale, row["ruolo"]),
                 )
-                cur.execute(
-                    """
-                    UPDATE budget_tracker
-                    SET budget_speso = budget_speso + %s
-                    WHERE ruolo = %s
-                    """,
-                    (req.prezzo_finale, row["ruolo"]),
-                )
+
             conn.commit()
     return {"status": "ok"}
 

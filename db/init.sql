@@ -83,14 +83,6 @@ CREATE TABLE IF NOT EXISTS asta_log (
     creato_il TIMESTAMP DEFAULT now()
 );
 
--- Budget per ruolo durante l'asta
-CREATE TABLE IF NOT EXISTS budget_tracker (
-    id SERIAL PRIMARY KEY,
-    ruolo TEXT NOT NULL CHECK (ruolo IN ('P', 'D', 'C', 'A')),
-    budget_totale NUMERIC NOT NULL,
-    budget_speso NUMERIC DEFAULT 0
-);
-
 -- Censimento squadre della lega, con budget totale (uguale per tutte all'inizio)
 CREATE TABLE IF NOT EXISTS squadre (
     id SERIAL PRIMARY KEY,

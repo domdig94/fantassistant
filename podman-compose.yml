@@ -56,6 +56,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-fantauser}:${POSTGRES_PASSWORD:-fantapass}@postgres:5432/${POSTGRES_DB:-fantassistant}
       CHROMA_HOST: fanta-chroma
       CHROMA_PORT: 8000
+      MY_TEAM: ${MY_TEAM:-my_team}
       AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
       AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-10-21}
