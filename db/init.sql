@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS giocatori (
     quotazione_attuale NUMERIC,
     fvm NUMERIC, -- Fantavalore di Mercato, utile per orientarsi in asta
     creato_il TIMESTAMP DEFAULT now(),
+    aggiornato_il TIMESTAMP DEFAULT now(),
     UNIQUE (nome, squadra)
 );
 

@@ -50,7 +50,8 @@ def import_listone(xlsx_path: str, foglio: str = "Tutti"):
                         squadra = EXCLUDED.squadra,          -- <--- Aggiorna la squadra se è cambiata!
                         quotazione_iniziale = EXCLUDED.quotazione_iniziale,
                         quotazione_attuale = EXCLUDED.quotazione_attuale,
-                        fvm = EXCLUDED.fvm;
+                        fvm = EXCLUDED.fvm,
+                        aggiornato_il = now()
                     """,
                     (
                         int(row["Id"]),
