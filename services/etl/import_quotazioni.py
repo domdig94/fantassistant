@@ -10,6 +10,8 @@ Colonne attese nel foglio "Tutti":
 
 Uso (dentro al container etl):
     python import_quotazioni.py /app/data/Quotazioni_Fantacalcio.xlsx
+    # Con rimozione automatica dei giocatori non piu' nel listone (fantasmi):
+    python import_quotazioni.py /app/data/Quotazioni_Fantacalcio.xlsx --sync
 
 Idempotente: fa upsert su (nome, squadra), quindi puoi rilanciarlo dopo
 un aggiornamento del listone (es. dopo il calciomercato estivo) senza
@@ -24,13 +26,17 @@ import psycopg
 DATABASE_URL = os.environ["DATABASE_URL"]
 
 
-def import_listone(xlsx_path: str, foglio: str = "Tutti"):
+def import_listone(xlsx_path: str, foglio: str = "Tutti", sync: bool = False):
     df = pd.read_excel(xlsx_path, sheet_name=foglio, header=1)
 
     richieste = {"Id", "R", "Nome", "Squadra", "Qt.A", "Qt.I", "FVM"}
     mancanti = richieste - set(df.columns)
     if mancanti:
         raise ValueError(f"Colonne mancanti nel file: {mancanti}")
+
+    ids_nel_file = set(
+        int(row) for row in df["Id"].dropna()
+    )
 
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
@@ -64,14 +70,42 @@ def import_listone(xlsx_path: str, foglio: str = "Tutti"):
                     ),
                 )
                 count += 1
+
+            if sync:
+                # Trova e rimuove i giocatori non piu' presenti nel listone.
+                # ON DELETE CASCADE su statistiche_storiche e le altre tabelle
+                # collegate garantisce che non restino righe orfane.
+                cur.execute(
+                    "SELECT id, fanta_id, nome, squadra FROM giocatori "
+                    "WHERE fanta_id IS NOT NULL AND fanta_id != ALL(%s)",
+                    (list(ids_nel_file),),
+                )
+                fantasmi = cur.fetchall()
+                if fantasmi:
+                    cur.execute(
+                        "DELETE FROM giocatori WHERE fanta_id != ALL(%s) "
+                        "AND fanta_id IS NOT NULL",
+                        (list(ids_nel_file),),
+                    )
+                    print(f"Rimossi {len(fantasmi)} giocatori non piu' nel listone:")
+                    for g in fantasmi:
+                        print(f"  - {g[2]} ({g[3]}, fanta_id={g[1]})")
+                else:
+                    print("Nessun fantasma trovato.")
+
             conn.commit()
 
     print(f"Importati/aggiornati {count} giocatori dal foglio '{foglio}'.")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Uso: python import_quotazioni.py <path_xlsx> [nome_foglio]")
+    args = sys.argv[1:]
+    if not args:
+        print("Uso: python import_quotazioni.py <path_xlsx> [nome_foglio] [--sync]")
         sys.exit(1)
-    foglio = sys.argv[2] if len(sys.argv) > 2 else "Tutti"
-    import_listone(sys.argv[1], foglio)
+
+    sync = "--sync" in args
+    args = [a for a in args if a != "--sync"]
+
+    foglio = args[1] if len(args) > 1 else "Tutti"
+    import_listone(args[0], foglio, sync=sync)

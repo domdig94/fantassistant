@@ -63,6 +63,18 @@ COLONNE_ORDINABILI = {
     "nome": "nome",
 }
 
+COLONNE_STAT_ORDINABILI = {
+    "fantamedia": "fantamedia",
+    "media_voto": "media_voto",
+    "gol": "gol",
+    "assist": "assist",
+    "presenze": "presenze",
+    "ammonizioni": "ammonizioni",
+    "espulsioni": "espulsioni",
+    "rigori_parati": "rigori_parati",
+    "autogol": "autogol",
+}
+
 def get_chroma_client():
     # Rimuove temporaneamente le variabili proxy per evitare che httpx le intercetti
     proxy_vars = {}
@@ -98,6 +110,50 @@ def get_collection():
 
 def get_conn():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+
+def esegui_statistiche_storiche(
+    stagione=None,
+    ruolo=None,
+    order_by="fantamedia",
+    ordine="desc",
+    limit=10,
+    nome=None,
+):
+    """
+    Interroga statistiche_storiche con join su giocatori.
+    Usata dal tool cerca_statistiche_storiche.
+    """
+    colonna = COLONNE_STAT_ORDINABILI.get(order_by, "fantamedia")
+    direzione = "ASC" if ordine == "asc" else "DESC"
+    limit = min(int(limit or 10), 50)
+
+    query = """
+        SELECT g.nome, g.ruolo, g.squadra,
+               s.stagione, s.presenze, s.media_voto, s.fantamedia,
+               s.gol, s.assist, s.ammonizioni, s.espulsioni,
+               s.gol_subiti, s.rigori_parati, s.autogol
+        FROM statistiche_storiche s
+        JOIN giocatori g ON g.id = s.giocatore_id
+        WHERE 1=1
+    """
+    params = []
+    if stagione:
+        query += " AND s.stagione = %s"
+        params.append(stagione)
+    if ruolo:
+        query += " AND g.ruolo = %s"
+        params.append(ruolo)
+    if nome:
+        query += " AND g.nome ILIKE %s"
+        params.append(f"%{nome}%")
+    query += f" ORDER BY {colonna} {direzione} NULLS LAST LIMIT %s"
+    params.append(limit)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
 
 
 TOOLS_BASE = [
@@ -222,18 +278,73 @@ TOOL_STRATEGIA = {
     },
 }
 
-TOOLS_ASTA = TOOLS_BASE + [TOOL_BUDGET, TOOL_ROSA, TOOL_ROSA_ALTRUI, TOOL_STRATEGIA]
-TOOLS_GENERALE = TOOLS_BASE + [TOOL_ROSA, TOOL_ROSA_ALTRUI]
+TOOL_STATISTICHE_STORICHE = {
+    "type": "function",
+    "function": {
+        "name": "cerca_statistiche_storiche",
+        "description": (
+            "Interroga le statistiche storiche stagionali dei giocatori "
+            "(presenze, media voto, fantamedia, gol, assist, ammonizioni, "
+            "espulsioni, gol subiti, rigori parati, autogol). Usa questo "
+            "strumento per domande tipo 'chi ha segnato di più negli ultimi "
+            "anni', 'top 10 per fantamedia nella stagione 2023/24', "
+            "'storico di Vlahovic', 'chi è più affidabile negli ultimi 3 anni'. "
+            "Puoi filtrare per stagione (es. '2024/25'), ruolo e nome giocatore, "
+            "e ordinare per qualsiasi statistica."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "stagione": {
+                    "type": "string",
+                    "description": "Filtra per stagione, formato YYYY/YY (es. '2024/25'). Ometti per tutte le stagioni.",
+                },
+                "ruolo": {
+                    "type": "string",
+                    "enum": ["P", "D", "C", "A"],
+                    "description": "Filtra per ruolo. Ometti per tutti.",
+                },
+                "nome": {
+                    "type": "string",
+                    "description": "Filtra per nome giocatore (match parziale). Utile per lo storico di un singolo.",
+                },
+                "order_by": {
+                    "type": "string",
+                    "enum": list(COLONNE_STAT_ORDINABILI.keys()),
+                    "description": "Campo su cui ordinare i risultati.",
+                },
+                "ordine": {
+                    "type": "string",
+                    "enum": ["asc", "desc"],
+                    "description": "asc = dal più basso, desc = dal più alto.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Numero massimo di risultati (default 10, max 50).",
+                },
+            },
+            "required": ["order_by", "ordine"],
+        },
+    },
+}
+
+TOOLS_GENERALE = TOOLS_BASE + [TOOL_ROSA, TOOL_ROSA_ALTRUI, TOOL_STATISTICHE_STORICHE]
+TOOLS_ASTA = TOOLS_BASE + [TOOL_BUDGET, TOOL_ROSA, TOOL_ROSA_ALTRUI, TOOL_STRATEGIA, TOOL_STATISTICHE_STORICHE]
 
 SYSTEM_PROMPT_ASTA = (
-    "Sei un assistente esperto di Fantacalcio, in asta live. Hai sei "
+    "Sei un assistente esperto di Fantacalcio, in asta live. Hai sette "
     "strumenti: uno per query strutturate su giocatori (ordinamenti/"
     "filtri/top-N, di default solo tra i liberi), uno per ricerca "
     "semantica (domande aperte), uno per sapere il MIO budget "
     "residuo, uno per sapere la MIA rosa attuale, uno per la rosa di "
     "ALTRE squadre della lega, uno per una fotografia completa della mia "
     "situazione in asta (slot mancanti per ruolo, budget medio per slot, "
-    "candidati liberi, andamento mercato). Quando l'utente chiede "
+    "candidati liberi, andamento mercato), uno per le statistiche storiche "
+    "stagionali (presenze, gol, assist, fantamedia degli anni passati). "
+    "Usa cerca_statistiche_storiche per domande sulle stagioni precedenti "
+    "('quanto ha segnato X negli ultimi anni', 'top per fantamedia nel "
+    "2023/24', 'storico di Y') — queste info aiutano a valutare un "
+    "giocatore durante l'asta. Quando l'utente chiede "
     "consigli su chi prendere per un singolo acquisto, controlla SEMPRE "
     "prima il budget residuo con lo strumento dedicato, poi cerca "
     "giocatori liberi compatibili con quel budget. Per domande di "
@@ -262,11 +373,16 @@ SYSTEM_PROMPT_ASTA = (
 SYSTEM_PROMPT_GENERALE = (
     "Sei un assistente esperto di Fantacalcio, per la gestione della "
     "squadra durante il campionato (formazioni, statistiche, chi "
-    "schierare, confronti tra giocatori). Hai quattro strumenti: uno per "
+    "schierare, confronti tra giocatori). Hai cinque strumenti: uno per "
     "query strutturate (ordinamenti/filtri/top-N su dati esatti), uno "
     "per ricerca semantica (domande aperte o su un giocatore specifico), "
     "uno per sapere la MIA rosa attuale, uno per la rosa di ALTRE "
-    "squadre della lega. Per 'chi ha il valore piu alto/basso' o 'top N' "
+    "squadre della lega, uno per le statistiche storiche stagionali "
+    "(presenze, gol, assist, fantamedia degli anni passati). "
+    "Usa cerca_statistiche_storiche per domande sulle stagioni precedenti "
+    "('quanto ha segnato X negli ultimi anni', 'top per fantamedia', "
+    "'storico di Y', 'chi schiero tra X e Y guardando la storia'). "
+    "Per 'chi ha il valore piu alto/basso' o 'top N' "
     "usa SEMPRE lo strumento SQL, mai la ricerca semantica. Per la mia "
     "rosa/squadra usa SEMPRE lo strumento la_mia_rosa; per QUALSIASI "
     "domanda sulla rosa o acquisti di una squadra/persona diversa da me "
@@ -492,6 +608,17 @@ def esegui_ricerca_semantica(query: str, top_k: int = 8):
     return risultati["documents"][0] if risultati["documents"] else []
 
 
+def get_stagione_corrente() -> str | None:
+    """Ritorna la stagione più recente presente nel DB (es. '2025/26')."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT stagione FROM statistiche_storiche ORDER BY stagione DESC LIMIT 1"
+            )
+            r = cur.fetchone()
+    return r["stagione"] if r else None
+
+
 app = FastAPI(title="FantAssistant Chatbot")
 
 app.add_middleware(
@@ -529,11 +656,21 @@ def ingest():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT g.id, g.nome, g.ruolo, g.squadra, g.quotazione_attuale, g.fvm,
-                       s.stagione, s.presenze, s.gol, s.assist, s.media_voto,
-                       mr.prezzo_pagato
+                       mr.prezzo_pagato,
+                       array_agg(
+                           json_build_object(
+                               'stagione', s.stagione,
+                               'presenze', s.presenze,
+                               'gol',      s.gol,
+                               'assist',   s.assist,
+                               'media_voto', s.media_voto,
+                               'fantamedia', s.fantamedia
+                           ) ORDER BY s.stagione DESC
+                       ) FILTER (WHERE s.stagione IS NOT NULL) AS stagioni
                 FROM giocatori g
                 LEFT JOIN statistiche_storiche s ON s.giocatore_id = g.id
                 LEFT JOIN mia_rosa mr ON mr.giocatore_id = g.id
+                GROUP BY g.id, g.nome, g.ruolo, g.squadra, g.quotazione_attuale, g.fvm, mr.prezzo_pagato
             """)
             rows = cur.fetchall()
 
@@ -548,12 +685,14 @@ def ingest():
         )
         if r["fvm"] is not None:
             testo += f"Fantavalore di mercato (FVM): {r['fvm']}. "
-        if r["stagione"]:
-            testo += (
-                f"Stagione {r['stagione']}: {r['presenze']} presenze, "
-                f"{r['gol']} gol, {r['assist']} assist, "
-                f"media voto {r['media_voto']}. "
-            )
+        if r["stagioni"]:
+            for s in r["stagioni"]:
+                testo += (
+                    f"Stagione {s['stagione']}: {s['presenze']} presenze, "
+                    f"{s['gol']} gol, {s['assist']} assist, "
+                    f"media voto {s['media_voto']}, "
+                    f"fantamedia {s['fantamedia']}. "
+                )
         if r["prezzo_pagato"] is not None:
             testo += f"E' nella MIA ROSA, pagato {r['prezzo_pagato']} crediti."
         ids.append(str(r["id"]))
@@ -571,6 +710,16 @@ def ingest():
 def chat(req: ChatRequest):
     tools = TOOLS_ASTA if req.modalita == "asta" else TOOLS_GENERALE
     system_prompt = SYSTEM_PROMPT_ASTA if req.modalita == "asta" else SYSTEM_PROMPT_GENERALE
+
+    # Arricchisce il system prompt con la stagione corrente ricavata dal DB,
+    # così il modello sa cosa intende l'utente con "ultima stagione" o "quest'anno".
+    stagione_corrente = get_stagione_corrente()
+    if stagione_corrente:
+        system_prompt += (
+            f" La stagione più recente disponibile nel database è {stagione_corrente}: "
+            f"quando l'utente dice 'ultima stagione', 'quest'anno' o 'stagione corrente' "
+            f"intende sempre questa."
+        )
 
     messages = (
         [{"role": "system", "content": system_prompt}]
@@ -639,6 +788,16 @@ def chat(req: ChatRequest):
             elif tool_call.function.name == "strategia_asta":
                 risultato = esegui_strategia_asta()
                 contesto_usato.append(json.dumps(risultato, default=str, ensure_ascii=False))
+            elif tool_call.function.name == "cerca_statistiche_storiche":
+                righe = esegui_statistiche_storiche(**args)
+                risultato = [dict(r) for r in righe]
+                contesto_usato.extend(
+                    f"{r['nome']} ({r['ruolo']}, {r['squadra']}) "
+                    f"stagione {r['stagione']}: "
+                    f"fantamedia {r['fantamedia']}, gol {r['gol']}, assist {r['assist']}, "
+                    f"presenze {r['presenze']}"
+                    for r in risultato
+                )
             else:
                 risultato = []
 
