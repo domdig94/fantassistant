@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS statistiche_storiche (
     gol INTEGER DEFAULT 0,
     assist INTEGER DEFAULT 0,
     media_voto NUMERIC,
+    fantamedia NUMERIC,
+    gol_subiti INTEGER DEFAULT 0,
+    rigori_parati INTEGER DEFAULT 0,
+    rigori_calciati INTEGER DEFAULT 0,
+    bonus INTEGER DEFAULT 0,
+    malus INTEGER DEFAULT 0,
+    autogol INTEGER DEFAULT 0,
     ammonizioni INTEGER DEFAULT 0,
     espulsioni INTEGER DEFAULT 0,
     UNIQUE (giocatore_id, stagione)
