@@ -63,6 +63,7 @@ services:
       ROSA_TARGET_D: ${ROSA_TARGET_D:-8}
       ROSA_TARGET_C: ${ROSA_TARGET_C:-8}
       ROSA_TARGET_A: ${ROSA_TARGET_A:-6}
+      BUDGET_LEGA: ${BUDGET_LEGA:-1000}
       AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
       AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
       AZURE_OPENAI_API_VERSION: ${AZURE_OPENAI_API_VERSION:-2024-10-21}
@@ -139,11 +140,30 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-fantauser}:${POSTGRES_PASSWORD:-fantapass}@postgres:5432/${POSTGRES_DB:-fantassistant}
+      BUDGET_LEGA: ${BUDGET_LEGA:-1000}
     volumes:
       - ./services/etl:/app:Z
     # Servizio "one-shot" per ora: lo lanci a mano con podman exec / podman-compose run
     # In futuro puoi trasformarlo in un cron container.
     command: ["sleep", "infinity"]
+
+  analytics:
+    build: ./services/analytics
+    container_name: fanta-analytics
+    networks:
+      - fanta-net
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fantauser}:${POSTGRES_PASSWORD:-fantapass}@postgres:5432/${POSTGRES_DB:-fantassistant}
+      MY_TEAM: ${MY_TEAM:-my_team}
+      BUDGET_LEGA: ${BUDGET_LEGA:-1000}
+    ports:
+      - "8004:8000"
+    volumes:
+      - ./services/analytics:/app:Z
 
 volumes:
   pgdata:
