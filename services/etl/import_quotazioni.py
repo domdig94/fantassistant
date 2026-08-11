@@ -10,6 +10,8 @@ Colonne attese nel foglio "Tutti":
 
 Uso (dentro al container etl):
     python import_quotazioni.py /app/data/Quotazioni_Fantacalcio.xlsx
+    # Con budget lega diverso da 1000 (es. 500):
+    python import_quotazioni.py /app/data/Quotazioni_Fantacalcio.xlsx --budget 500
     # Con rimozione automatica dei giocatori non piu' nel listone (fantasmi):
     python import_quotazioni.py /app/data/Quotazioni_Fantacalcio.xlsx --sync
 
@@ -17,6 +19,7 @@ Idempotente: fa upsert su (nome, squadra), quindi puoi rilanciarlo dopo
 un aggiornamento del listone (es. dopo il calciomercato estivo) senza
 creare duplicati - aggiorna solo i valori.
 """
+import math
 import os
 import sys
 
@@ -24,15 +27,22 @@ import pandas as pd
 import psycopg
 
 DATABASE_URL = os.environ["DATABASE_URL"]
+# FVM nel listone e' calibrato su budget 1000. BUDGET_LEGA scala al budget reale.
+BUDGET_LEGA = int(os.environ.get("BUDGET_LEGA", "1000"))
 
 
-def import_listone(xlsx_path: str, foglio: str = "Tutti", sync: bool = False):
+def import_listone(xlsx_path: str, foglio: str = "Tutti", sync: bool = False, budget_lega: int = BUDGET_LEGA):
+    fvm_scale = budget_lega / 1000
+
     df = pd.read_excel(xlsx_path, sheet_name=foglio, header=1)
 
     richieste = {"Id", "R", "Nome", "Squadra", "Qt.A", "Qt.I", "FVM"}
     mancanti = richieste - set(df.columns)
     if mancanti:
         raise ValueError(f"Colonne mancanti nel file: {mancanti}")
+
+    if fvm_scale != 1.0:
+        print(f"FVM scalato da base 1000 a budget {budget_lega} (fattore {fvm_scale})")
 
     ids_nel_file = set(
         int(row) for row in df["Id"].dropna()
@@ -66,7 +76,7 @@ def import_listone(xlsx_path: str, foglio: str = "Tutti", sync: bool = False):
                         str(row["Squadra"]).strip(),
                         int(row["Qt.I"]),
                         int(row["Qt.A"]),
-                        int(row["FVM"]),
+                        math.ceil(float(row["FVM"]) * fvm_scale),
                     ),
                 )
                 count += 1
@@ -101,11 +111,17 @@ def import_listone(xlsx_path: str, foglio: str = "Tutti", sync: bool = False):
 if __name__ == "__main__":
     args = sys.argv[1:]
     if not args:
-        print("Uso: python import_quotazioni.py <path_xlsx> [nome_foglio] [--sync]")
+        print("Uso: python import_quotazioni.py <path_xlsx> [nome_foglio] [--sync] [--budget 500]")
         sys.exit(1)
 
     sync = "--sync" in args
     args = [a for a in args if a != "--sync"]
 
+    budget_lega = BUDGET_LEGA
+    if "--budget" in args:
+        idx = args.index("--budget")
+        budget_lega = int(args[idx + 1])
+        args = args[:idx] + args[idx + 2:]
+
     foglio = args[1] if len(args) > 1 else "Tutti"
-    import_listone(args[0], foglio, sync=sync)
+    import_listone(args[0], foglio, sync=sync, budget_lega=budget_lega)
