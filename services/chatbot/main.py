@@ -187,9 +187,12 @@ TOOL_ROSA_ALTRUI = {
             "Ritorna l'elenco ESATTO dei giocatori acquistati da una "
             "squadra specifica della lega (non la mia), preso da "
             "asta_log che contiene tutti gli acquisti di tutti. Usa "
-            "questo strumento per domande tipo 'chi ha in rosa X', "
-            "'cosa ha preso la squadra Y'. NON usare la_mia_rosa per "
-            "questo (quella e' solo per la mia squadra)."
+            "questo strumento per QUALSIASI domanda che chiede la rosa "
+            "o gli acquisti di una squadra/persona diversa da me: 'chi "
+            "ha in rosa X', 'chi ha in squadra X', 'cosa ha preso X', "
+            "'la squadra di X', dove X e' un nome di squadra o di "
+            "allenatore. NON usare la_mia_rosa per questo (quella e' "
+            "solo per la mia squadra)."
         ),
         "parameters": {
             "type": "object",
@@ -239,9 +242,15 @@ SYSTEM_PROMPT_ASTA = (
     "sola chiamata - non serve comporlo con altri strumenti. Per 'chi ha "
     "il valore piu alto/basso' o 'top N' usa SEMPRE lo strumento SQL, mai "
     "la ricerca semantica. Per la mia rosa/squadra usa SEMPRE lo "
-    "strumento la_mia_rosa; per la rosa di ALTRE squadre della lega usa "
-    "SEMPRE rosa_di_squadra, mai la_mia_rosa ne' la ricerca semantica - "
-    "quella puo' restituire giocatori a caso. Rispondi SOLO in base ai "
+    "strumento la_mia_rosa; per QUALSIASI domanda sulla rosa o acquisti "
+    "di una squadra/persona diversa da me ('chi ha in rosa X', 'chi ha "
+    "in squadra X', 'cosa ha preso X', 'la squadra di X', dove X puo' "
+    "essere un nome di squadra O di allenatore) usa SEMPRE "
+    "rosa_di_squadra, mai la_mia_rosa ne' la ricerca semantica - quella "
+    "puo' restituire giocatori a caso. Quando rispondi su "
+    "rosa_di_squadra, usa SEMPRE il nome squadra vero e l'allenatore "
+    "restituiti dallo strumento, non ripetere il testo che ha scritto "
+    "l'utente come se fosse il nome ufficiale. Rispondi SOLO in base ai "
     "risultati degli strumenti, mai inventando dati. Se i risultati non "
     "bastano, dillo. "
     "Non annunciare MAI un'azione futura (es. 'ora cerco', 'un attimo', 'ci "
@@ -259,11 +268,17 @@ SYSTEM_PROMPT_GENERALE = (
     "uno per sapere la MIA rosa attuale, uno per la rosa di ALTRE "
     "squadre della lega. Per 'chi ha il valore piu alto/basso' o 'top N' "
     "usa SEMPRE lo strumento SQL, mai la ricerca semantica. Per la mia "
-    "rosa/squadra usa SEMPRE lo strumento la_mia_rosa; per la rosa di "
-    "ALTRE squadre della lega usa SEMPRE rosa_di_squadra, mai "
-    "la_mia_rosa ne' la ricerca semantica - quella puo' restituire "
-    "giocatori a caso. Rispondi SOLO in base ai risultati degli "
-    "strumenti, mai inventando dati. Se i risultati non bastano, dillo. "
+    "rosa/squadra usa SEMPRE lo strumento la_mia_rosa; per QUALSIASI "
+    "domanda sulla rosa o acquisti di una squadra/persona diversa da me "
+    "('chi ha in rosa X', 'chi ha in squadra X', 'cosa ha preso X', 'la "
+    "squadra di X', dove X puo' essere un nome di squadra O di "
+    "allenatore) usa SEMPRE rosa_di_squadra, mai la_mia_rosa ne' la "
+    "ricerca semantica - quella puo' restituire giocatori a caso. "
+    "Quando rispondi su rosa_di_squadra, usa SEMPRE il nome squadra "
+    "vero e l'allenatore restituiti dallo strumento, non ripetere il "
+    "testo che ha scritto l'utente come se fosse il nome ufficiale. "
+    "Rispondi SOLO in base ai risultati degli strumenti, mai inventando "
+    "dati. Se i risultati non bastano, dillo. "
     "Non annunciare MAI un'azione futura (es. 'ora cerco', 'un attimo', 'ci "
     "penso') senza eseguirla nella stessa risposta: o chiami subito lo "
     "strumento giusto e rispondi con il risultato, oppure rispondi "
@@ -342,19 +357,28 @@ def esegui_mia_rosa():
         
 
 def esegui_rosa_di_squadra(nome_squadra: str):
+    parole = [p for p in nome_squadra.strip().split() if p]
+    if not parole:
+        return []
+
+    condizioni, params = [], []
+    for p in parole:
+        condizioni.append("(s.nome ILIKE %s OR s.allenatore ILIKE %s)")
+        params.extend([f"%{p}%", f"%{p}%"])
+    where_clause = " OR ".join(condizioni)
+
+    query = f"""
+        SELECT g.nome, g.ruolo, g.squadra, a.prezzo_finale,
+               s.nome AS nome_squadra, s.allenatore
+        FROM asta_log a
+        JOIN giocatori g ON g.id = a.giocatore_id
+        JOIN squadre s ON s.nome = a.squadra_acquirente
+        WHERE {where_clause}
+        ORDER BY g.ruolo, g.nome
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT g.nome, g.ruolo, g.squadra, a.prezzo_finale
-                FROM asta_log a
-                JOIN giocatori g ON g.id = a.giocatore_id
-                JOIN squadre s ON s.nome = a.squadra_acquirente
-                WHERE s.nome ILIKE %s OR s.allenatore ILIKE %s
-                ORDER BY g.ruolo, g.nome
-                """,
-                (f"%{nome_squadra}%", f"%{nome_squadra}%"),
-            )
+            cur.execute(query, params)
             return cur.fetchall()
         
 
@@ -603,12 +627,15 @@ def chat(req: ChatRequest):
                 righe = esegui_rosa_di_squadra(**args)
                 risultato = [dict(r) for r in righe]
                 if risultato:
+                    nome_reale = risultato[0]["nome_squadra"]
+                    allenatore = risultato[0]["allenatore"]
+                    contesto_usato.append(f"Squadra trovata: '{nome_reale}' (allenatore: {allenatore})")
                     contesto_usato.extend(
                         f"{r['nome']} ({r['ruolo']}, {r['squadra']}), pagato {r['prezzo_finale']}"
                         for r in risultato
                     )
                 else:
-                    contesto_usato.append("Nessun acquisto trovato per quella squadra.")
+                    contesto_usato.append(f"Nessuna squadra trovata per '{args.get('nome_squadra')}'.")
             elif tool_call.function.name == "strategia_asta":
                 risultato = esegui_strategia_asta()
                 contesto_usato.append(json.dumps(risultato, default=str, ensure_ascii=False))
