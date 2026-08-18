@@ -1,0 +1,13 @@
+# Databricks App — Frontend statico
+# Copia frontend/analytics.html (e gli altri file HTML) in questa cartella.
+# Aggiorna le costanti API_BASE_URL nei file HTML per puntare
+# agli URL delle Databricks Apps (visibili dopo il deploy).
+#
+# Struttura attesa:
+#   apps/frontend/
+#     analytics.html
+#     index.html
+#     (altri file statici)
+#
+# Il runtime Databricks Apps serve automaticamente i file statici
+# dalla cartella dell'app se non c'e' un server Python.
