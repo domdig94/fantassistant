@@ -21,39 +21,36 @@ Parametri (passati come job parameters o env vars):
 import math
 import os
 import sys
-
 import pandas as pd
 from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
 from pyspark.sql.types import (
     StructType, StructField,
     LongType, StringType, DoubleType
 )
-from delta.tables import DeltaTable
+from upsert_utils import upsert_giocatori
 
 spark = SparkSession.builder.getOrCreate()
 
-CATALOG     = os.environ.get("UNITY_CATALOG", "fantassistant")
-SCHEMA      = os.environ.get("UNITY_SCHEMA",  "main")
-XLSX_PATH   = os.environ.get("XLSX_PATH",     "/Volumes/fantassistant/main/uploads/listone.xlsx")
-FOGLIO      = os.environ.get("FOGLIO",        "Tutti")
-SYNC        = os.environ.get("SYNC",          "false").lower() == "true"
-BUDGET_LEGA = int(os.environ.get("BUDGET_LEGA", "1000"))
+# Parsing parametri: accetta KEY=VALUE da command line (Job parameters)
+# oppure da environment variables, con fallback ai default.
+_cli_args = {}
+for arg in sys.argv[1:]:
+    if "=" in arg:
+        k, v = arg.split("=", 1)
+        _cli_args[k] = v
+
+def _param(name: str, default: str) -> str:
+    return _cli_args.get(name, os.environ.get(name, default))
+
+CATALOG     = _param("UNITY_CATALOG", "platform")
+SCHEMA      = _param("UNITY_SCHEMA",  "fantassistant")
+XLSX_PATH   = _param("XLSX_PATH",     "/Volumes/platform/fantassistant/uploads/listone.xlsx")
+FOGLIO      = _param("FOGLIO",        "Tutti")
+SYNC        = _param("SYNC",          "false").lower() == "true"
+BUDGET_LEGA = int(_param("BUDGET_LEGA", "1000"))
 
 TABLE = f"`{CATALOG}`.`{SCHEMA}`.giocatori"
 
-
-def _build_testo_embedding(nome, ruolo, squadra, fvm, quot_att):
-    """
-    Testo libero usato come sorgente per il Vector Search embedding.
-    Mantieni aggiornato se aggiungi campi rilevanti.
-    """
-    ruolo_label = {"P": "Portiere", "D": "Difensore", "C": "Centrocampista", "A": "Attaccante"}.get(ruolo, ruolo)
-    return (
-        f"{nome} è un {ruolo_label} del {squadra}. "
-        f"Quotazione attuale: {quot_att} crediti. "
-        f"Fantavalore di mercato (FVM): {fvm} crediti."
-    )
 
 
 def import_listone(xlsx_path: str, foglio: str = "Tutti", sync: bool = False, budget_lega: int = 1000):
@@ -79,9 +76,8 @@ def import_listone(xlsx_path: str, foglio: str = "Tutti", sync: bool = False, bu
         quot_i    = float(row["Qt.I"])
         quot_a    = float(row["Qt.A"])
         fvm       = float(math.ceil(float(row["FVM"]) * fvm_scale))
-        testo     = _build_testo_embedding(nome, ruolo, squadra, fvm, quot_a)
         ids_nel_file.add(fanta_id)
-        rows.append((fanta_id, nome, ruolo, squadra, quot_i, quot_a, fvm, testo))
+        rows.append((fanta_id, nome, ruolo, squadra, quot_i, quot_a, fvm))
 
     schema = StructType([
         StructField("fanta_id",            LongType(),   True),
@@ -91,39 +87,11 @@ def import_listone(xlsx_path: str, foglio: str = "Tutti", sync: bool = False, bu
         StructField("quotazione_iniziale", DoubleType(), True),
         StructField("quotazione_attuale",  DoubleType(), True),
         StructField("fvm",                 DoubleType(), True),
-        StructField("testo_embedding",     StringType(), True),
     ])
     incoming = spark.createDataFrame(rows, schema=schema)
 
     # ---------- UPSERT su Delta Table ----------
-    dt = DeltaTable.forName(spark, f"{CATALOG}.{SCHEMA}.giocatori")
-    (
-        dt.alias("target")
-        .merge(incoming.alias("src"), "target.fanta_id = src.fanta_id")
-        .whenMatchedUpdate(set={
-            "nome":                "src.nome",
-            "ruolo":               "src.ruolo",
-            "squadra":             "src.squadra",
-            "quotazione_iniziale": "src.quotazione_iniziale",
-            "quotazione_attuale":  "src.quotazione_attuale",
-            "fvm":                 "src.fvm",
-            "testo_embedding":     "src.testo_embedding",
-            "aggiornato_il":       F.current_timestamp(),
-        })
-        .whenNotMatchedInsert(values={
-            "fanta_id":            "src.fanta_id",
-            "nome":                "src.nome",
-            "ruolo":               "src.ruolo",
-            "squadra":             "src.squadra",
-            "quotazione_iniziale": "src.quotazione_iniziale",
-            "quotazione_attuale":  "src.quotazione_attuale",
-            "fvm":                 "src.fvm",
-            "testo_embedding":     "src.testo_embedding",
-            "creato_il":           F.current_timestamp(),
-            "aggiornato_il":       F.current_timestamp(),
-        })
-        .execute()
-    )
+    upsert_giocatori(incoming)
     print(f"Upsert completato: {len(rows)} giocatori dal foglio '{foglio}'.")
 
     # ---------- SYNC: rimuovi fantasmi ----------

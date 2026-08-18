@@ -1,17 +1,19 @@
 # Databricks notebook source
+# /// script
+# [tool.databricks.environment]
+# environment_version = "5"
+# ///
 # FantAssistant — Creazione tabelle Delta Lake in Unity Catalog
 # Eseguire UNA SOLA VOLTA (o in caso di reset completo)
 # Le tabelle sono equivalenti allo schema PostgreSQL in db/init.sql
 
-import os
 from databricks.sdk.runtime import spark  # disponibile nei notebook Databricks
 
-CATALOG = os.environ.get("UNITY_CATALOG", "fantassistant")
-SCHEMA  = os.environ.get("UNITY_SCHEMA",  "main")
+CATALOG = "platform"
+SCHEMA  = "fantassistant"
 NS      = f"`{CATALOG}`.`{SCHEMA}`"
 
-spark.sql(f"CREATE CATALOG IF NOT EXISTS `{CATALOG}`")
-spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{CATALOG}`.`{SCHEMA}`")
+spark.sql(f"CREATE SCHEMA IF NOT EXISTS {NS}")
 
 # --------------------------------------------------------------------------
 # giocatori
@@ -27,13 +29,10 @@ CREATE TABLE IF NOT EXISTS {NS}.giocatori (
     quotazione_attuale  DOUBLE,
     fvm              DOUBLE,
     creato_il        TIMESTAMP DEFAULT current_timestamp(),
-    aggiornato_il    TIMESTAMP DEFAULT current_timestamp(),
-    CONSTRAINT ruolo_check CHECK (ruolo IN ('P','D','C','A')),
-    CONSTRAINT giocatori_fanta_id_unique UNIQUE (fanta_id),
-    CONSTRAINT giocatori_nome_squadra_unique UNIQUE (nome, squadra)
+    aggiornato_il    TIMESTAMP DEFAULT current_timestamp()
 )
 USING DELTA
-TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')
+TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true', 'delta.feature.allowColumnDefaults' = 'supported')
 """)
 
 # --------------------------------------------------------------------------
@@ -57,10 +56,11 @@ CREATE TABLE IF NOT EXISTS {NS}.statistiche_storiche (
     autogol          INT    DEFAULT 0,
     ammonizioni      INT    DEFAULT 0,
     espulsioni       INT    DEFAULT 0,
-    CONSTRAINT stat_storiche_fk FOREIGN KEY (giocatore_id) REFERENCES {NS}.giocatori(id),
-    CONSTRAINT stat_storiche_unique UNIQUE (giocatore_id, stagione)
+    CONSTRAINT stat_storiche_fk FOREIGN KEY (giocatore_id) REFERENCES {NS}.giocatori(id)
 )
+
 USING DELTA
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')
 """)
 
 # --------------------------------------------------------------------------
@@ -72,10 +72,10 @@ CREATE TABLE IF NOT EXISTS {NS}.squadre (
     nome           STRING NOT NULL,
     allenatore     STRING,
     budget_totale  DOUBLE NOT NULL,
-    creato_il      TIMESTAMP DEFAULT current_timestamp(),
-    CONSTRAINT squadre_nome_unique UNIQUE (nome)
+    creato_il      TIMESTAMP DEFAULT current_timestamp()
 )
 USING DELTA
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')
 """)
 
 # --------------------------------------------------------------------------
@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS {NS}.asta_log (
     CONSTRAINT asta_log_fk FOREIGN KEY (giocatore_id) REFERENCES {NS}.giocatori(id)
 )
 USING DELTA
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')
 """)
 
 # --------------------------------------------------------------------------
@@ -107,6 +108,7 @@ CREATE TABLE IF NOT EXISTS {NS}.mia_rosa (
     CONSTRAINT mia_rosa_fk FOREIGN KEY (giocatore_id) REFERENCES {NS}.giocatori(id)
 )
 USING DELTA
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')
 """)
 
 # --------------------------------------------------------------------------
@@ -124,10 +126,11 @@ CREATE TABLE IF NOT EXISTS {NS}.voti_giornata (
     assist       INT    DEFAULT 0,
     ammonizione  BOOLEAN DEFAULT FALSE,
     espulsione   BOOLEAN DEFAULT FALSE,
-    CONSTRAINT voti_fk FOREIGN KEY (giocatore_id) REFERENCES {NS}.giocatori(id),
-    CONSTRAINT voti_unique UNIQUE (giocatore_id, giornata, stagione)
+    CONSTRAINT voti_fk FOREIGN KEY (giocatore_id) REFERENCES {NS}.giocatori(id)
 )
+
 USING DELTA
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')
 """)
 
 # --------------------------------------------------------------------------
@@ -143,6 +146,7 @@ CREATE TABLE IF NOT EXISTS {NS}.calendario (
     stagione          STRING NOT NULL
 )
 USING DELTA
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')
 """)
 
 # --------------------------------------------------------------------------
@@ -159,6 +163,52 @@ CREATE TABLE IF NOT EXISTS {NS}.formazioni_probabili (
     creato_il  TIMESTAMP DEFAULT current_timestamp()
 )
 USING DELTA
+TBLPROPERTIES ('delta.feature.allowColumnDefaults' = 'supported')
 """)
 
 print(f"Tabelle create in {CATALOG}.{SCHEMA}")
+
+# COMMAND ----------
+
+# DBTITLE 1,Aggiunta CHECK constraints
+# --------------------------------------------------------------------------
+# CHECK constraints (Delta Lake li supporta solo via ALTER TABLE)
+# --------------------------------------------------------------------------
+
+constraints = [
+    # giocatori
+    ("giocatori", "ruolo_check", "ruolo IN ('P','D','C','A')"),
+    ("giocatori", "quotazione_iniziale_pos", "quotazione_iniziale >= 0"),
+    ("giocatori", "quotazione_attuale_pos", "quotazione_attuale >= 0"),
+    # mia_rosa
+    ("mia_rosa", "ruolo_fanta_check", "ruolo_fanta IN ('P','D','C','A')"),
+    ("mia_rosa", "prezzo_pagato_pos", "prezzo_pagato >= 0"),
+    # statistiche_storiche
+    ("statistiche_storiche", "presenze_pos", "presenze >= 0"),
+    ("statistiche_storiche", "gol_pos", "gol >= 0"),
+    ("statistiche_storiche", "assist_pos", "assist >= 0"),
+    # voti_giornata
+    ("voti_giornata", "giornata_range", "giornata BETWEEN 1 AND 38"),
+    ("voti_giornata", "voti_gol_pos", "gol >= 0"),
+    ("voti_giornata", "voti_assist_pos", "assist >= 0"),
+    # squadre
+    ("squadre", "budget_pos", "budget_totale > 0"),
+    # asta_log
+    ("asta_log", "prezzo_finale_pos", "prezzo_finale >= 0"),
+    # calendario
+    ("calendario", "cal_giornata_range", "giornata BETWEEN 1 AND 38"),
+    # formazioni_probabili
+    ("formazioni_probabili", "form_giornata_range", "giornata BETWEEN 1 AND 38"),
+]
+
+for table, name, expr in constraints:
+    try:
+        spark.sql(f"ALTER TABLE {NS}.{table} ADD CONSTRAINT {name} CHECK ({expr})")
+        print(f"  + {table}.{name}")
+    except Exception as e:
+        if "CONSTRAINT_ALREADY_EXISTS" in str(e) or "already exists" in str(e).lower():
+            print(f"  ~ {table}.{name} (già presente)")
+        else:
+            print(f"  ! {table}.{name} ERRORE: {e}")
+
+print("\nCHECK constraints completati.")

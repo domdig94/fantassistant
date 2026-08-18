@@ -10,22 +10,36 @@ Parametri (env vars o job parameters):
 """
 import os
 import re
+import subprocess
+import sys
+
+subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "openpyxl"])
 
 import pandas as pd
 from pyspark.sql import SparkSession
-from pyspark.sql import functions as F
 from pyspark.sql.types import (
     StructType, StructField,
     LongType, IntegerType, StringType, DoubleType,
 )
-from delta.tables import DeltaTable
+from upsert_utils import upsert_statistiche_storiche
 
 spark = SparkSession.builder.getOrCreate()
 
-CATALOG           = os.environ.get("UNITY_CATALOG", "fantassistant")
-SCHEMA            = os.environ.get("UNITY_SCHEMA",  "main")
-XLSX_PATHS_RAW    = os.environ.get("XLSX_PATHS",    "")
-STAGIONE_OVERRIDE = os.environ.get("STAGIONE",      None)
+# Parsing parametri: accetta KEY=VALUE da command line (Job parameters)
+# oppure da environment variables, con fallback ai default.
+_cli_args = {}
+for arg in sys.argv[1:]:
+    if "=" in arg:
+        k, v = arg.split("=", 1)
+        _cli_args[k] = v
+
+def _param(name: str, default: str) -> str:
+    return _cli_args.get(name, os.environ.get(name, default))
+
+CATALOG           = _param("UNITY_CATALOG", "platform")
+SCHEMA            = _param("UNITY_SCHEMA",  "fantassistant")
+XLSX_PATHS_RAW    = _param("XLSX_PATHS",    "")
+STAGIONE_OVERRIDE = _param("STAGIONE",      "") or None
 
 
 def _ricava_stagione(xlsx_path: str, df_raw: pd.DataFrame) -> str:
@@ -119,17 +133,7 @@ def import_statistiche(xlsx_path: str, stagione_override: str | None = None):
     ])
     incoming = spark.createDataFrame(rows, schema=schema)
 
-    dt = DeltaTable.forName(spark, f"{CATALOG}.{SCHEMA}.statistiche_storiche")
-    (
-        dt.alias("target")
-        .merge(
-            incoming.alias("src"),
-            "target.giocatore_id = src.giocatore_id AND target.stagione = src.stagione"
-        )
-        .whenMatchedUpdateAll()
-        .whenNotMatchedInsertAll()
-        .execute()
-    )
+    upsert_statistiche_storiche(incoming)
     print(
         f"Stagione {stagione}: {len(rows)} upsertati, "
         f"{saltati} saltati (non in anagrafica), {incompleti} scartati."
@@ -139,6 +143,6 @@ def import_statistiche(xlsx_path: str, stagione_override: str | None = None):
 if __name__ == "__main__":
     paths = [p.strip() for p in XLSX_PATHS_RAW.split(",") if p.strip()]
     if not paths:
-        print("Imposta XLSX_PATHS con i path dei file xlsx separati da virgola.")
+        raise ValueError("Imposta XLSX_PATHS con i path dei file xlsx separati da virgola.")
     for path in paths:
         import_statistiche(path, stagione_override=STAGIONE_OVERRIDE)
