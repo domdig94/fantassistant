@@ -210,18 +210,28 @@ def confronta(ids: str = Query(..., description="Id giocatori separati da virgol
 
     # Grafico 1: Fantamedia e Media voto (scala 0-10)
     chart_voti = {
-        "labels": nomi,
+        "labels": ["Fantamedia", "Media voto"],
         "datasets": [
-            {"label": "Fantamedia",  "data": [float(g["fantamedia_media"]  or 0) for g in giocatori]},
-            {"label": "Media voto",  "data": [float(g["media_voto_media"]  or 0) for g in giocatori]},
+            {
+                "label": f"{g['nome']} ({g['squadra']})",
+                "data": [
+                    float(g["fantamedia_media"] or 0),
+                    float(g["media_voto_media"] or 0),
+                ],
+            }
+            for g in giocatori
         ],
     }
 
     # Grafico 3: Presenze (scala 0-38)
     chart_presenze = {
-        "labels": nomi,
+        "labels": ["Presenze"],
         "datasets": [
-            {"label": "Presenze", "data": [float(g["presenze_media"] or 0) for g in giocatori]},
+            {
+                "label": f"{g['nome']} ({g['squadra']})",
+                "data": [float(g["presenze_media"] or 0)],
+            }
+            for g in giocatori
         ],
     }
     # Grafico 2: Gol, Assist, Ammonizioni — una metrica per dataset,
