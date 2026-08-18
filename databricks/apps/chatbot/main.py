@@ -11,25 +11,35 @@ Differenze rispetto alla versione Podman:
 """
 import os
 import json
+import logging
+import time
+import threading
+from collections import deque
+from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import AzureOpenAI
 from databricks import sql as dbsql
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.core import Config
 from databricks.vector_search.client import VectorSearchClient
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-DATABRICKS_HOST      = os.environ["DATABRICKS_HOST"]
-DATABRICKS_TOKEN     = os.environ["DATABRICKS_TOKEN"]
+# Il WorkspaceClient si autentica automaticamente nel runtime Databricks App
+# usando il service principal OAuth (DATABRICKS_CLIENT_ID + CLIENT_SECRET).
+w = WorkspaceClient()
+cfg = w.config
+DATABRICKS_HOST = cfg.host
 DATABRICKS_HTTP_PATH = os.environ["DATABRICKS_SQL_HTTP_PATH"]
 CATALOG  = os.environ.get("UNITY_CATALOG", "fantassistant")
 SCHEMA   = os.environ.get("UNITY_SCHEMA",  "main")
 NS       = f"`{CATALOG}`.`{SCHEMA}`"
 
-VS_ENDPOINT = os.environ["VECTOR_SEARCH_ENDPOINT"]
+VS_ENDPOINT = os.environ.get("VECTOR_SEARCH_ENDPOINT", "fantassistant_vs_endpoint")
 VS_INDEX    = f"{CATALOG}.{SCHEMA}.giocatori_vs_index"
 
 client_ai = AzureOpenAI(
@@ -47,6 +57,36 @@ ROSA_TARGET = {
 }
 
 # ---------------------------------------------------------------------------
+# Persistent Logging (ring buffer + Delta table flush)
+# ---------------------------------------------------------------------------
+# NOTE: NS uses env vars that may not match the actual catalog/schema.
+# Hardcode the log table to the known correct location.
+LOG_TABLE = "`platform`.`fantassistant`.app_logs"
+APP_NAME = os.environ.get("DATABRICKS_APP_NAME", "fantassistant-chatbot")
+LOG_BUFFER: deque = deque(maxlen=500)
+LOG_FLUSH_INTERVAL = 30  # seconds
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("fantassistant")
+
+
+def _log_entry(level: str, message: str, extra: dict | None = None):
+    """Append a structured log entry to the in-memory buffer."""
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "message": message,
+        "extra": json.dumps(extra or {}, default=str, ensure_ascii=False),
+    }
+    LOG_BUFFER.append(entry)
+    logger.log(getattr(logging, level, logging.INFO), message)
+
+
+# ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
 
@@ -54,7 +94,7 @@ def get_conn():
     return dbsql.connect(
         server_hostname=DATABRICKS_HOST.replace("https://", ""),
         http_path=DATABRICKS_HTTP_PATH,
-        access_token=DATABRICKS_TOKEN,
+        credentials_provider=lambda: cfg.authenticate,
     )
 
 
@@ -64,6 +104,40 @@ def query_rows(sql: str, params: list | None = None) -> list[dict]:
             cur.execute(sql, params or [])
             cols = [d[0] for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def _flush_logs_to_table():
+    """Flush buffered logs to the Delta table. Runs in background thread."""
+    while True:
+        time.sleep(LOG_FLUSH_INTERVAL)
+        if not LOG_BUFFER:
+            continue
+        batch = list(LOG_BUFFER)
+        LOG_BUFFER.clear()
+        try:
+            values = ",\n".join(
+                "('{}', '{}', '{}', '{}', '{}')".format(
+                    e["ts"],
+                    e["level"],
+                    e["message"].replace("'", "''"),
+                    e["extra"].replace("'", "''"),
+                    APP_NAME,
+                )
+                for e in batch
+            )
+            sql = f"INSERT INTO {LOG_TABLE} (ts, level, message, extra, app_name) VALUES {values}"
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql)
+        except Exception as exc:
+            logger.warning(f"Log flush failed: {exc}")
+            for e in batch:
+                LOG_BUFFER.append(e)
+
+
+# Start background flush thread
+_flush_thread = threading.Thread(target=_flush_logs_to_table, daemon=True)
+_flush_thread.start()
 
 # ---------------------------------------------------------------------------
 # Vector Search (sostituisce Chroma)
@@ -75,7 +149,8 @@ def get_vs_client() -> VectorSearchClient:
     if _vs_client is None:
         _vs_client = VectorSearchClient(
             workspace_url=DATABRICKS_HOST,
-            personal_access_token=DATABRICKS_TOKEN,
+            service_principal_client_id=os.environ.get("DATABRICKS_CLIENT_ID"),
+            service_principal_client_secret=os.environ.get("DATABRICKS_CLIENT_SECRET"),
         )
     return _vs_client
 
@@ -513,6 +588,27 @@ app = FastAPI(title="FantAssistant Chatbot — Databricks")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log every incoming request with timing."""
+    start = time.time()
+    response = await call_next(request)
+    duration_ms = round((time.time() - start) * 1000, 1)
+    _log_entry(
+        "INFO",
+        f"{request.method} {request.url.path} -> {response.status_code} ({duration_ms}ms)",
+        extra={"method": request.method, "path": str(request.url.path), "status": response.status_code, "ms": duration_ms},
+    )
+    return response
+
+
+@app.get("/app-logs")
+def get_app_logs(n: int = 100):
+    """Return the last N log entries from the in-memory buffer."""
+    entries = list(LOG_BUFFER)[-min(n, 500):]
+    return {"count": len(entries), "logs": entries}
+
+
 class ChatRequest(BaseModel):
     domanda: str
     top_k: int = 8
@@ -546,6 +642,7 @@ def ingest():
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
+    _log_entry("INFO", f"Chat request: modalita={req.modalita}", extra={"domanda": req.domanda[:200]})
     tools         = TOOLS_ASTA     if req.modalita == "asta" else TOOLS_GENERALE
     system_prompt = SYSTEM_PROMPT_ASTA if req.modalita == "asta" else SYSTEM_PROMPT_GENERALE
 
@@ -649,4 +746,11 @@ def chat(req: ChatRequest):
     else:
         risposta = msg.content
 
+    _log_entry("INFO", f"Chat completed: {len(contesto_usato)} context items")
     return ChatResponse(risposta=risposta, contesto_usato=contesto_usato)
+
+
+@app.on_event("startup")
+def on_startup():
+    _log_entry("INFO", "FantAssistant chatbot started")
+    _log_entry("INFO", f"Log table: {LOG_TABLE} (pre-created externally)")

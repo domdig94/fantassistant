@@ -15,8 +15,8 @@ from databricks.sdk.service.vectorsearch import (
 
 w = WorkspaceClient()
 
-CATALOG  = os.environ.get("UNITY_CATALOG", "fantassistant")
-SCHEMA   = os.environ.get("UNITY_SCHEMA",  "main")
+CATALOG = "platform"
+SCHEMA  = "fantassistant"
 VS_ENDPOINT = os.environ.get("VECTOR_SEARCH_ENDPOINT", "fantassistant-vs")
 
 SOURCE_TABLE = f"{CATALOG}.{SCHEMA}.giocatori"
@@ -37,10 +37,29 @@ else:
     print(f"Endpoint '{VS_ENDPOINT}' già esistente.")
 
 # --------------------------------------------------------------------------
-# 2. Crea indice Delta Sync (si aggiorna automaticamente al cambio tabella)
+# 2. Assicura che la colonna 'testo_embedding' esista nella tabella sorgente
 # --------------------------------------------------------------------------
-# La colonna 'testo_embedding' va creata nella tabella giocatori come colonna
-# calcolata o aggiornata dall'ETL. Vedi etl/etl_quotazioni.py per la logica.
+cols = [c.name for c in spark.table(SOURCE_TABLE).schema]
+if "testo_embedding" not in cols:
+    print("Aggiungo colonna 'testo_embedding' alla tabella...")
+    spark.sql(f"ALTER TABLE {SOURCE_TABLE} ADD COLUMNS (testo_embedding STRING)")
+    spark.sql(f"""
+        UPDATE {SOURCE_TABLE}
+        SET testo_embedding = concat_ws(' | ',
+            concat('Nome: ', nome),
+            concat('Ruolo: ', ruolo),
+            concat('Squadra: ', squadra),
+            concat('Quotazione: ', CAST(quotazione_attuale AS STRING)),
+            concat('FVM: ', CAST(fvm AS STRING))
+        )
+    """)
+    print("Colonna 'testo_embedding' aggiunta e popolata.")
+else:
+    print("Colonna 'testo_embedding' già presente.")
+
+# --------------------------------------------------------------------------
+# 3. Crea indice Delta Sync (si aggiorna automaticamente al cambio tabella)
+# --------------------------------------------------------------------------
 # L'embedding model è gestito internamente da Databricks Vector Search
 # (non serve un deployment Azure OAI separato per gli embedding).
 # --------------------------------------------------------------------------
