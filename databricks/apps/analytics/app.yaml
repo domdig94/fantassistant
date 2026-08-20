@@ -3,10 +3,6 @@ command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 env:
   - name: DATABRICKS_SQL_HTTP_PATH
     valueFrom: DATABRICKS_SQL_HTTP_PATH
-  - name: UNITY_CATALOG
-    value: "platform"
-  - name: UNITY_SCHEMA
-    value: "fantassistant"
   - name: MY_TEAM
     valueFrom: MY_TEAM
   - name: BUDGET_LEGA

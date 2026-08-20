@@ -75,10 +75,10 @@ def cerca(q: str = Query(..., min_length=2)):
     rows = query_rows(f"""
         SELECT id, nome, ruolo, squadra, quotazione_attuale, fvm
         FROM {NS}.giocatori
-        WHERE lower(nome) LIKE lower(?)
+        WHERE lower(nome) LIKE lower(:q_pattern)
         ORDER BY nome
         LIMIT 20
-    """, [f"%{q}%"])
+    """, {"q_pattern": f"%{q}%"})
     return {"risultati": rows}
 
 
@@ -95,8 +95,8 @@ def scheda_giocatore(giocatore_id: int):
                CASE WHEN mr.giocatore_id IS NOT NULL THEN true ELSE false END AS in_rosa
         FROM {NS}.giocatori g
         LEFT JOIN {NS}.mia_rosa mr ON mr.giocatore_id = g.id
-        WHERE g.id = ?
-    """, [giocatore_id])
+        WHERE g.id = :giocatore_id
+    """, {"giocatore_id": giocatore_id})
     if not rows:
         raise HTTPException(status_code=404, detail="Giocatore non trovato")
     g = rows[0]
@@ -107,18 +107,18 @@ def scheda_giocatore(giocatore_id: int):
                gol_subiti, rigori_parati, rigori_calciati,
                bonus, malus, autogol
         FROM {NS}.statistiche_storiche
-        WHERE giocatore_id = ?
+        WHERE giocatore_id = :giocatore_id
         ORDER BY stagione ASC
-    """, [giocatore_id])
+    """, {"giocatore_id": giocatore_id})
 
     voti = query_rows(f"""
         SELECT giornata, voto, fantavoto, gol, assist,
                ammonizione, espulsione, stagione
         FROM {NS}.voti_giornata
-        WHERE giocatore_id = ?
+        WHERE giocatore_id = :giocatore_id
         ORDER BY stagione DESC, giornata ASC
         LIMIT 38
-    """, [giocatore_id])
+    """, {"giocatore_id": giocatore_id})
 
     trend_fantamedia = {
         "labels": [s["stagione"] for s in stagioni],
@@ -250,15 +250,15 @@ def valore_atteso(
             SELECT giocatore_id FROM {NS}.asta_log WHERE giocatore_id IS NOT NULL
         )
     """
-    params = []
+    params = {}
     if ruolo:
-        sql += " AND g.ruolo = ?"
-        params.append(ruolo)
+        sql += " AND g.ruolo = :ruolo"
+        params["ruolo"] = ruolo
     if budget_max:
-        sql += " AND g.fvm <= ?"
-        params.append(budget_max)
+        sql += " AND g.fvm <= :budget_max"
+        params["budget_max"] = budget_max
     sql += " ORDER BY g.id, s.stagione DESC"
-    rows = query_rows(sql, params)
+    rows = query_rows(sql, params or None)
 
     PESI = [3, 2, 1, 0.5]
 
@@ -493,9 +493,9 @@ def top_giornata(numero: int, limit: int = Query(10, le=20)):
         FROM {NS}.voti_giornata vg
         JOIN {NS}.giocatori g ON g.id = vg.giocatore_id
         LEFT JOIN {NS}.asta_log a ON a.giocatore_id = vg.giocatore_id
-        WHERE vg.giornata = ?
+        WHERE vg.giornata = :giornata
         ORDER BY vg.fantavoto DESC NULLS LAST
-    """, [numero])
+    """, {"giornata": numero})
 
     top  = tutti[:limit]
     flop = sorted(tutti, key=lambda x: (x["fantavoto"] or 0))[:limit]
