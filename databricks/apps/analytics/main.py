@@ -126,7 +126,7 @@ def scheda_giocatore(giocatore_id: int):
     }
 
     def somma(campo):
-        return sum((s[campo] or 0) for s in stagioni)
+        return sum(float(s[campo] or 0) for s in stagioni)
 
     radar = {
         "labels": ["Gol", "Assist", "Rigori parati", "Rigori calciati", "Ammonizioni", "Espulsioni", "Autogol"],
@@ -498,5 +498,5 @@ def top_giornata(numero: int, limit: int = Query(10, le=20)):
     """, {"giornata": numero})
 
     top  = tutti[:limit]
-    flop = sorted(tutti, key=lambda x: (x["fantavoto"] or 0))[:limit]
+    flop = sorted(tutti, key=lambda x: float(x["fantavoto"] or 0))[:limit]
     return {"giornata": numero, "top": top, "flop": flop}
