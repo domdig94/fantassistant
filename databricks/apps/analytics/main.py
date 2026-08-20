@@ -3,8 +3,8 @@ FantAssistant Databricks — Analytics App (FastAPI)
 
 Sostituisce interamente services/analytics/main.py.
 Differenze rispetto alla versione Podman:
-  - psycopg (PostgreSQL)  -> databricks-sql-connector
-  - %s placeholder         -> ?
+  - psycopg (PostgreSQL)  -> Statement Execution API (databricks-sdk)
+  - %s placeholder         -> :named_param (StatementParameterListItem)
   - Nomi tabella           -> `catalog`.`schema`.tabella
   - ANY(%s) PostgreSQL     -> IN (...) con join o subquery compatibile Spark SQL
   - ILIKE                  -> lower() LIKE lower()
@@ -15,38 +15,46 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from databricks import sql as dbsql
-
+from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
+from databricks.sdk.service.sql import StatementState, StatementParameterListItem
 
 _cfg = Config()  # usa automaticamente l'auth del service principal dell'app
+_ws = WorkspaceClient(config=_cfg)
 
 DATABRICKS_HOST      = _cfg.host
 DATABRICKS_HTTP_PATH = os.environ["DATABRICKS_SQL_HTTP_PATH"]
-CATALOG    = os.environ.get("UNITY_CATALOG", "fantassistant")
-SCHEMA     = os.environ.get("UNITY_SCHEMA",  "main")
+CATALOG    = os.environ.get("UNITY_CATALOG", "platform")
+SCHEMA     = os.environ.get("UNITY_SCHEMA",  "fantassistant")
 NS         = f"`{CATALOG}`.`{SCHEMA}`"
 MY_TEAM    = os.environ.get("MY_TEAM", "Io")
 BUDGET_LEGA = int(os.environ.get("BUDGET_LEGA", "1000"))
+
+_WAREHOUSE_ID = DATABRICKS_HTTP_PATH.rstrip("/").split("/")[-1]
 
 app = FastAPI(title="FantAssistant Analytics — Databricks")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-def get_conn():
-    return dbsql.connect(
-        server_hostname=DATABRICKS_HOST.replace("https://", ""),
-        http_path=DATABRICKS_HTTP_PATH,
-        credentials_provider=_cfg.authenticate,
+def query_rows(sql: str, params: dict[str, str] | None = None) -> list[dict]:
+    stmt_params = None
+    if params:
+        stmt_params = [
+            StatementParameterListItem(name=k, value=str(v))
+            for k, v in params.items()
+        ]
+    response = _ws.statement_execution.execute_statement(
+        warehouse_id=_WAREHOUSE_ID,
+        statement=sql,
+        parameters=stmt_params,
+        wait_timeout="30s",
     )
-
-
-def query_rows(sql: str, params: list | None = None) -> list[dict]:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params or [])
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
+    if response.status.state != StatementState.SUCCEEDED:
+        err = response.status.error
+        raise RuntimeError(f"SQL failed ({response.status.state}): {err}")
+    cols = [c.name for c in response.manifest.schema.columns]
+    rows = response.result.data_array or []
+    return [dict(zip(cols, row)) for row in rows]
 
 
 # ---------------------------------------------------------------------------
