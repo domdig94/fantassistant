@@ -3,13 +3,11 @@ command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 env:
   - name: DATABRICKS_SQL_HTTP_PATH
     valueFrom: DATABRICKS_SQL_HTTP_PATH
-  - name: AZURE_OPENAI_ENDPOINT
-    valueFrom: AZURE_OPENAI_ENDPOINT
-  - name: AZURE_OPENAI_API_KEY
-    valueFrom: AZURE_OPENAI_API_KEY
-  - name: AZURE_OPENAI_API_VERSION
-    valueFrom: AZURE_OPENAI_API_VERSION
   - name: MY_TEAM
     valueFrom: MY_TEAM
+  - name: BUDGET_LEGA
+    valueFrom: BUDGET_LEGA
   - name: VECTOR_SEARCH_ENDPOINT
     valueFrom: VECTOR_SEARCH_ENDPOINT
+  - name: DBX_LLM_ENDPOINT
+    value: "databricks-claude-opus-4-8"

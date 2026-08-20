@@ -13,42 +13,61 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from databricks import sql as dbsql
 
+from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
+from databricks.sdk.service.sql import StatementState, StatementParameterListItem
 
 _cfg = Config()  # usa automaticamente l'auth del service principal dell'app
+_ws = WorkspaceClient(config=_cfg)
 
-DATABRICKS_HOST      = os.environ["DATABRICKS_HOST"]
 DATABRICKS_HTTP_PATH = os.environ["DATABRICKS_SQL_HTTP_PATH"]
-CATALOG = os.environ.get("UNITY_CATALOG", "fantassistant")
-SCHEMA  = os.environ.get("UNITY_SCHEMA",  "main")
+CATALOG = os.environ.get("UNITY_CATALOG", "platform")  # tabelle in catalog 'platform'
+SCHEMA  = os.environ.get("UNITY_SCHEMA",  "fantassistant")
 NS      = f"`{CATALOG}`.`{SCHEMA}`"
+_WAREHOUSE_ID = DATABRICKS_HTTP_PATH.rstrip("/").split("/")[-1]
 
 app = FastAPI(title="FantAssistant Auction Tracker — Databricks")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-def get_conn():
-    return dbsql.connect(
-        server_hostname=DATABRICKS_HOST.replace("https://", ""),
-        http_path=DATABRICKS_HTTP_PATH,
-        credentials_provider=_cfg.authenticate,
+def query_rows(sql: str, params: dict[str, str] | None = None) -> list[dict]:
+    stmt_params = None
+    if params:
+        stmt_params = [
+            StatementParameterListItem(name=k, value=str(v))
+            for k, v in params.items()
+        ]
+    response = _ws.statement_execution.execute_statement(
+        warehouse_id=_WAREHOUSE_ID,
+        statement=sql,
+        parameters=stmt_params,
+        wait_timeout="30s",
     )
+    if response.status.state != StatementState.SUCCEEDED:
+        err = response.status.error
+        raise RuntimeError(f"SQL failed ({response.status.state}): {err}")
+    cols = [c.name for c in response.manifest.schema.columns]
+    rows = response.result.data_array or []
+    return [dict(zip(cols, row)) for row in rows]
 
 
-def query_rows(sql: str, params: list | None = None) -> list[dict]:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params or [])
-            cols = [d[0] for d in cur.description]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
-
-
-def execute_dml(sql: str, params: list | None = None):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params or [])
+def execute_dml(sql: str, params: dict[str, str] | None = None):
+    stmt_params = None
+    if params:
+        stmt_params = [
+            StatementParameterListItem(name=k, value=str(v))
+            for k, v in params.items()
+        ]
+    response = _ws.statement_execution.execute_statement(
+        warehouse_id=_WAREHOUSE_ID,
+        statement=sql,
+        parameters=stmt_params,
+        wait_timeout="30s",
+    )
+    if response.status.state != StatementState.SUCCEEDED:
+        err = response.status.error
+        raise RuntimeError(f"SQL failed ({response.status.state}): {err}")
 
 
 class RegistraAcquisto(BaseModel):
@@ -85,14 +104,14 @@ def init_squadre(req: InitSquadre):
         allenatore = s.allenatore.strip() if s.allenatore else None
         execute_dml(f"""
             MERGE INTO {NS}.squadre AS target
-            USING (SELECT '{nome}' AS nome) AS src
+            USING (SELECT :nome AS nome) AS src
             ON target.nome = src.nome
             WHEN MATCHED THEN
-                UPDATE SET allenatore = '{allenatore}', budget_totale = {req.budget_totale}
+                UPDATE SET allenatore = :allenatore, budget_totale = :budget_totale
             WHEN NOT MATCHED THEN
                 INSERT (nome, allenatore, budget_totale)
-                VALUES ('{nome}', '{allenatore}', {req.budget_totale})
-        """)
+                VALUES (:nome, :allenatore, :budget_totale)
+        """, {"nome": nome, "allenatore": allenatore or "", "budget_totale": req.budget_totale})
     return {"status": "ok", "squadre_registrate": len(req.squadre)}
 
 
@@ -122,9 +141,9 @@ def registra_acquisto(req: RegistraAcquisto):
                COALESCE(SUM(a.prezzo_finale), 0) AS budget_speso
         FROM {NS}.squadre s
         LEFT JOIN {NS}.asta_log a ON a.squadra_acquirente = s.nome
-        WHERE s.nome = ?
+        WHERE s.nome = :squadra_nome
         GROUP BY s.budget_totale
-    """, [req.squadra_acquirente])
+    """, {"squadra_nome": req.squadra_acquirente})
 
     if not squadra_rows:
         raise HTTPException(
@@ -144,20 +163,20 @@ def registra_acquisto(req: RegistraAcquisto):
 
     execute_dml(f"""
         INSERT INTO {NS}.asta_log (giocatore_id, prezzo_finale, squadra_acquirente, fonte)
-        VALUES (?, ?, ?, ?)
-    """, [req.giocatore_id, req.prezzo_finale, req.squadra_acquirente, req.fonte])
+        VALUES (:giocatore_id, :prezzo_finale, :squadra_acquirente, :fonte)
+    """, {"giocatore_id": req.giocatore_id, "prezzo_finale": req.prezzo_finale, "squadra_acquirente": req.squadra_acquirente, "fonte": req.fonte})
 
     if req.e_mio:
         ruolo_rows = query_rows(f"""
-            SELECT ruolo FROM {NS}.giocatori WHERE id = ?
-        """, [req.giocatore_id])
+            SELECT ruolo FROM {NS}.giocatori WHERE id = :giocatore_id
+        """, {"giocatore_id": req.giocatore_id})
         if not ruolo_rows:
             raise HTTPException(404, "Giocatore non trovato")
         ruolo = ruolo_rows[0]["ruolo"]
         execute_dml(f"""
             INSERT INTO {NS}.mia_rosa (giocatore_id, prezzo_pagato, ruolo_fanta)
-            VALUES (?, ?, ?)
-        """, [req.giocatore_id, req.prezzo_finale, ruolo])
+            VALUES (:giocatore_id, :prezzo_pagato, :ruolo_fanta)
+        """, {"giocatore_id": req.giocatore_id, "prezzo_pagato": req.prezzo_finale, "ruolo_fanta": ruolo})
 
     return {"status": "ok"}
 
@@ -171,11 +190,11 @@ def giocatori_liberi(ruolo: str | None = None):
             SELECT giocatore_id FROM {NS}.asta_log WHERE giocatore_id IS NOT NULL
         )
     """
-    params = []
+    params = {}
     if ruolo:
-        sql += " AND g.ruolo = ?"
-        params.append(ruolo)
-    return {"giocatori_liberi": query_rows(sql, params)}
+        sql += " AND g.ruolo = :ruolo"
+        params["ruolo"] = ruolo
+    return {"giocatori_liberi": query_rows(sql, params or None)}
 
 
 @app.get("/cerca-giocatori")
@@ -183,13 +202,13 @@ def cerca_giocatori(nome: str, solo_liberi: bool = True):
     sql = f"""
         SELECT g.id, g.nome, g.ruolo, g.squadra, g.quotazione_attuale, g.fvm
         FROM {NS}.giocatori g
-        WHERE lower(g.nome) LIKE lower(?)
+        WHERE lower(g.nome) LIKE lower(:nome_pattern)
     """
-    params = [f"%{nome}%"]
+    params = {"nome_pattern": f"%{nome}%"}
     if solo_liberi:
         sql += f" AND g.id NOT IN (SELECT giocatore_id FROM {NS}.asta_log WHERE giocatore_id IS NOT NULL)"
     sql += " ORDER BY g.fvm DESC NULLS LAST LIMIT 10"
-    return {"risultati": query_rows(sql, params)}
+    return {"risultati": query_rows(sql, params or None)}
 
 
 @app.get("/storico")

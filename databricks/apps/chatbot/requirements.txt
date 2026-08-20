@@ -3,5 +3,4 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 openai>=1.60.0
 databricks-sdk>=0.20.0
-databricks-sql-connector>=3.0.0
 databricks-vectorsearch>=0.22
