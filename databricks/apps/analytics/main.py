@@ -40,7 +40,7 @@ def _cast(value: str | None, type_name: str):
     """Converte il valore stringa di data_array nel tipo Python corretto."""
     if value is None:
         return None
-    t = (type_name or "").upper()
+    t = (type_name.value if hasattr(type_name, 'value') else str(type_name or "")).upper()
     if t in ("INT", "BIGINT", "SMALLINT", "TINYINT", "LONG"):
         return int(value)
     if t in ("DOUBLE", "FLOAT") or t.startswith("DECIMAL"):
