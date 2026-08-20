@@ -106,6 +106,20 @@ CHAT_MODEL = DBX_LLM_ENDPOINT
 _WAREHOUSE_ID = DATABRICKS_HTTP_PATH.rstrip("/").split("/")[-1]
 
 
+def _cast(value: str | None, type_name):
+    """Converte il valore stringa di data_array nel tipo Python corretto."""
+    if value is None:
+        return None
+    t = (type_name.value if hasattr(type_name, 'value') else str(type_name or "")).upper()
+    if t in ("INT", "BIGINT", "SMALLINT", "TINYINT", "LONG"):
+        return int(value)
+    if t in ("DOUBLE", "FLOAT") or t.startswith("DECIMAL"):
+        return float(value)
+    if t == "BOOLEAN":
+        return value.lower() == "true"
+    return value
+
+
 def query_rows(sql: str, params: dict[str, str] | None = None) -> list[dict]:
     stmt_params = None
     if params:
@@ -122,9 +136,14 @@ def query_rows(sql: str, params: dict[str, str] | None = None) -> list[dict]:
     if response.status.state != StatementState.SUCCEEDED:
         err = response.status.error
         raise RuntimeError(f"SQL failed ({response.status.state}): {err}")
-    cols = [c.name for c in response.manifest.schema.columns]
+    columns = response.manifest.schema.columns
+    cols = [c.name for c in columns]
+    types = [c.type_name for c in columns]
     rows = response.result.data_array or []
-    return [dict(zip(cols, row)) for row in rows]
+    return [
+        {col: _cast(val, typ) for col, val, typ in zip(cols, row, types)}
+        for row in rows
+    ]
 
 # ---------------------------------------------------------------------------
 # Vector Search
