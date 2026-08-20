@@ -17,8 +17,11 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from databricks import sql as dbsql
 
-DATABRICKS_HOST      = os.environ["DATABRICKS_HOST"]
-DATABRICKS_TOKEN     = os.environ["DATABRICKS_TOKEN"]
+from databricks.sdk.core import Config
+
+_cfg = Config()  # usa automaticamente l'auth del service principal dell'app
+
+DATABRICKS_HOST      = _cfg.host
 DATABRICKS_HTTP_PATH = os.environ["DATABRICKS_SQL_HTTP_PATH"]
 CATALOG    = os.environ.get("UNITY_CATALOG", "fantassistant")
 SCHEMA     = os.environ.get("UNITY_SCHEMA",  "main")
@@ -34,7 +37,7 @@ def get_conn():
     return dbsql.connect(
         server_hostname=DATABRICKS_HOST.replace("https://", ""),
         http_path=DATABRICKS_HTTP_PATH,
-        access_token=DATABRICKS_TOKEN,
+        credentials_provider=_cfg.authenticate,
     )
 
 
