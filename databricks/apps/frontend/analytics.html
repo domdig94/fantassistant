@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FantAssistant — Analytics</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0d0f14;
+    --panel: #161922;
+    --panel-2: #1d212c;
+    --line: #2a2f3d;
+    --text: #e9ebf0;
+    --muted: #868da0;
+    --pitch: #2f9e5e;
+    --pitch-dim: #1d3d2c;
+    --amber: #e0a339;
+    --red: #e0524f;
+    --blue: #4a8fd4;
+    --mono: 'SF Mono', 'JetBrains Mono', Consolas, monospace;
+    --sans: -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; }
+
+  header {
+    padding: 20px 28px 16px;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+  }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: 0.02em; }
+  header h1 span { color: var(--pitch); }
+  .nav-link { font-size: 13px; color: var(--muted); text-decoration: none; }
+  .nav-link:hover { color: var(--text); }
+
+  .tabs {
+    display: flex; gap: 2px; padding: 16px 28px 0; border-bottom: 1px solid var(--line);
+  }
+  .tab {
+    padding: 10px 18px; font-size: 13px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; border-top: none;
+    border-left: none; border-right: none; font-family: var(--sans);
+  }
+  .tab:hover { color: var(--text); }
+  .tab.attiva { color: var(--pitch); border-bottom-color: var(--pitch); }
+
+  .sezione { display: none; padding: 24px 28px; }
+  .sezione.attiva { display: block; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px;
+    margin-bottom: 20px;
+  }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 14px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+  input, select {
+    width: 100%; background: var(--panel-2); border: 1px solid var(--line);
+    color: var(--text); padding: 10px 12px; border-radius: 5px;
+    font-size: 14px; font-family: var(--sans);
+  }
+  input:focus, select:focus { outline: 1px solid var(--pitch); border-color: var(--pitch); }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px; }
+  label:first-of-type { margin-top: 0; }
+
+  button {
+    padding: 10px 20px; background: var(--pitch); color: #08120c;
+    border: none; border-radius: 5px; font-weight: 600; font-size: 13px;
+    cursor: pointer; font-family: var(--sans);
+  }
+  button:hover { filter: brightness(1.08); }
+  button.secondary {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  }
+
+  .autocomplete-box { position: relative; }
+  .autocomplete-lista {
+    position: absolute; top: 100%; left: 0; right: 0; z-index: 10;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px;
+    max-height: 200px; overflow-y: auto; display: none;
+  }
+  .autocomplete-lista.show { display: block; }
+  .autocomplete-item {
+    padding: 9px 12px; cursor: pointer; font-size: 13px;
+    border-bottom: 1px solid var(--line); display: flex; justify-content: space-between;
+  }
+  .autocomplete-item:last-child { border-bottom: none; }
+  .autocomplete-item:hover { background: var(--panel); }
+  .ac-info { color: var(--muted); font-family: var(--mono); font-size: 11px; }
+
+  .tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--pitch-dim); border: 1px solid var(--pitch);
+    border-radius: 4px; padding: 4px 10px; font-size: 12px; margin: 4px 4px 4px 0;
+  }
+  .tag .rm { cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; }
+  .tag .rm:hover { color: var(--red); }
+
+  .stat-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px;
+    margin-bottom: 16px;
+  }
+  .stat-chip { background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
+  .stat-chip .sc-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .stat-chip .sc-val { font-family: var(--mono); font-size: 20px; font-weight: 600; margin-top: 4px; }
+  .stat-chip .sc-val.good { color: var(--pitch); }
+  .stat-chip .sc-val.warn { color: var(--amber); }
+
+  .chart-box { position: relative; height: 260px; }
+  .chart-box-tall { position: relative; height: 340px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; color: var(--muted); font-weight: 500; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.06em; padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
+  td:first-child { font-family: var(--sans); font-size: 13px; }
+  tr:last-child td { border-bottom: none; }
+  .ruolo-badge {
+    display: inline-block; padding: 1px 6px; border-radius: 3px;
+    font-size: 10px; font-weight: 700; font-family: var(--mono);
+    background: var(--panel-2); color: var(--muted);
+  }
+
+  .vuoto { color: var(--muted); font-size: 13px; padding: 30px 0; text-align: center; }
+  .msg-err { color: var(--red); font-size: 13px; font-family: var(--mono); margin-top: 8px; }
+
+  .row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .flex-1 { flex: 1; min-width: 160px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Fant<span>Assistant</span> — Analytics</h1>
+  <a class="nav-link" href="index.html">← Asta Live</a>
+</header>
+
+<div class="tabs">
+  <button class="tab attiva" onclick="mostraSezione('scheda', this)">Scheda giocatore</button>
+  <button class="tab" onclick="mostraSezione('confronto', this)">Confronto</button>
+  <button class="tab" onclick="mostraSezione('valore', this)">Valore atteso</button>
+  <button class="tab" onclick="mostraSezione('mercato', this)">Tendenza mercato</button>
+  <button class="tab" onclick="mostraSezione('rosa', this)">Mia rosa</button>
+  <button class="tab" onclick="mostraSezione('lega', this)">Lega</button>
+</div>
+
+<!-- ===================== SCHEDA ===================== -->
+<div id="tab-scheda" class="sezione attiva">
+  <div class="panel">
+    <h2>Cerca giocatore</h2>
+    <div class="autocomplete-box">
+      <input type="text" id="cercaScheda" placeholder="Es: Dimarco, Vlahovic..." autocomplete="off">
+      <div class="autocomplete-lista" id="listaScheda"></div>
+    </div>
+  </div>
+  <div id="schedaContenuto"></div>
+</div>
+
+<!-- ===================== CONFRONTO ===================== -->
+<div id="tab-confronto" class="sezione">
+  <div class="panel">
+    <h2>Aggiungi giocatori al confronto (max 4)</h2>
+    <div class="autocomplete-box">
+      <input type="text" id="cercaConfronto" placeholder="Cerca e aggiungi..." autocomplete="off">
+      <div class="autocomplete-lista" id="listaConfronto"></div>
+    </div>
+    <div id="tagsConfronto" style="margin-top: 10px;"></div>
+    <div style="margin-top: 12px;">
+      <button onclick="caricaConfronto()">Confronta</button>
+    </div>
+  </div>
+  <div id="confrontoContenuto"></div>
+</div>
+
+<!-- ===================== VALORE ATTESO ===================== -->
+<div id="tab-valore" class="sezione">
+  <div class="panel">
+    <h2>Filtri</h2>
+    <div class="row">
+      <div class="flex-1">
+        <label>Ruolo</label>
+        <select id="valoreRuolo">
+          <option value="">Tutti</option>
+          <option value="P">Portieri</option>
+          <option value="D">Difensori</option>
+          <option value="C">Centrocampisti</option>
+          <option value="A">Attaccanti</option>
+        </select>
+      </div>
+      <div class="flex-1">
+        <label>Budget max</label>
+        <input type="number" id="valoreBudget" placeholder="es. 30" min="1">
+      </div>
+      <div>
+        <button onclick="caricaValoreAtteso()">Cerca occasioni</button>
+      </div>
+    </div>
+  </div>
+  <div id="valoreContenuto"></div>
+</div>
+
+<!-- ===================== MERCATO ===================== -->
+<div id="tab-mercato" class="sezione">
+  <div id="mercatoContenuto">
+    <div class="vuoto">Caricamento...</div>
+  </div>
+</div>
+
+<!-- ===================== MIA ROSA ===================== -->
+<div id="tab-rosa" class="sezione">
+  <div id="rosaContenuto">
+    <div class="vuoto">Caricamento...</div>
+  </div>
+</div>
+
+<!-- ===================== LEGA ===================== -->
+<div id="tab-lega" class="sezione">
+  <div id="legaContenuto">
+    <div class="vuoto">Caricamento...</div>
+  </div>
+</div>
+
+<script>
+const API = 'https://fantassistant-analytics-7405612795419433.13.azure.databricksapps.com';
+const COLORS = ['#2f9e5e','#4a8fd4','#e0a339','#e0524f','#9b59b6','#1abc9c'];
+let charts = {};
+
+function mostraSezione(nome, btn) {
+  document.querySelectorAll('.sezione').forEach(s => s.classList.remove('attiva'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('attiva'));
+  document.getElementById('tab-' + nome).classList.add('attiva');
+  btn.classList.add('attiva');
+  if (nome === 'mercato') caricaMercato();
+  if (nome === 'rosa') caricaRosa();
+  if (nome === 'lega') caricaLega();
+}
+
+function distruggiChart(id) {
+  if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+}
+
+// ---------------------------------------------------------------------------
+// AUTOCOMPLETE GENERICO
+// ---------------------------------------------------------------------------
+function setupAutocomplete(inputId, listaId, onSelect) {
+  const input = document.getElementById(inputId);
+  const lista = document.getElementById(listaId);
+  let timer;
+
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    const q = input.value.trim();
+    lista.classList.remove('show');
+    if (q.length < 2) return;
+    timer = setTimeout(async () => {
+      const res = await fetch(`${API}/cerca?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      lista.innerHTML = '';
+      if (!data.risultati.length) {
+        lista.innerHTML = '<div class="autocomplete-item"><span class="ac-info">Nessun risultato</span></div>';
+      } else {
+        data.risultati.forEach(g => {
+          const div = document.createElement('div');
+          div.className = 'autocomplete-item';
+          div.innerHTML = `<span>${g.nome}</span><span class="ac-info">${g.ruolo} · ${g.squadra} · FVM ${g.fvm ?? '-'}</span>`;
+          div.onclick = () => { lista.classList.remove('show'); input.value = ''; onSelect(g); };
+          lista.appendChild(div);
+        });
+      }
+      lista.classList.add('show');
+    }, 250);
+  });
+
+  document.addEventListener('click', e => {
+    if (!e.target.closest('#' + inputId) && !e.target.closest('#' + listaId))
+      lista.classList.remove('show');
+  });
+}
+
+// ---------------------------------------------------------------------------
+// SCHEDA GIOCATORE
+// ---------------------------------------------------------------------------
+setupAutocomplete('cercaScheda', 'listaScheda', g => caricaScheda(g.id, g.nome));
+
+async function caricaScheda(id, nome) {
+  const box = document.getElementById('schedaContenuto');
+  box.innerHTML = '<div class="vuoto">Caricamento...</div>';
+  try {
+    const res = await fetch(`${API}/giocatore/${id}/scheda`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    renderScheda(d);
+  } catch(e) {
+    box.innerHTML = `<div class="msg-err">Errore: ${e.message}</div>`;
+  }
+}
+
+function renderScheda(d) {
+  const g = d.giocatore;
+  const stagioni = d.stagioni;
+  const box = document.getElementById('schedaContenuto');
+
+  const inRosaBadge = g.in_rosa
+    ? `<span style="color:var(--pitch); font-size:12px; margin-left:8px;">● In rosa (pagato ${g.prezzo_pagato})</span>`
+    : '';
+
+  box.innerHTML = `
+    <div class="panel">
+      <h2>${g.nome} <span class="ruolo-badge">${g.ruolo}</span> — ${g.squadra} ${inRosaBadge}</h2>
+      <div class="stat-grid">
+        <div class="stat-chip"><div class="sc-label">Quotazione</div><div class="sc-val">${g.quotazione_attuale ?? '-'}</div></div>
+        <div class="stat-chip"><div class="sc-label">FVM</div><div class="sc-val good">${g.fvm ?? '-'}</div></div>
+        ${stagioni.length ? `
+        <div class="stat-chip"><div class="sc-label">Fantamedia (ult.)</div><div class="sc-val good">${stagioni[stagioni.length-1].fantamedia ?? '-'}</div></div>
+        <div class="stat-chip"><div class="sc-label">Presenze (ult.)</div><div class="sc-val">${stagioni[stagioni.length-1].presenze ?? '-'}</div></div>
+        <div class="stat-chip"><div class="sc-label">Gol (ult.)</div><div class="sc-val">${stagioni[stagioni.length-1].gol ?? '-'}</div></div>
+        <div class="stat-chip"><div class="sc-label">Assist (ult.)</div><div class="sc-val">${stagioni[stagioni.length-1].assist ?? '-'}</div></div>
+        ` : ''}
+      </div>
+    </div>
+    <div class="grid-2">
+      <div class="panel">
+        <h2>Trend fantamedia</h2>
+        <div class="chart-box"><canvas id="chartTrend"></canvas></div>
+      </div>
+      <div class="panel">
+        <h2>Bonus / Malus aggregati</h2>
+        <div class="chart-box"><canvas id="chartRadar"></canvas></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Storico stagioni</h2>
+      ${stagioni.length ? `
+      <table>
+        <thead><tr>
+          <th>Stagione</th><th>Pres.</th><th>Mv</th><th>Fm</th>
+          <th>Gol</th><th>Ass.</th><th>Amm.</th><th>Esp.</th>
+          <th>Gs</th><th>Rp</th><th>Au</th>
+        </tr></thead>
+        <tbody>
+          ${stagioni.map(s => `<tr>
+            <td>${s.stagione}</td>
+            <td>${s.presenze ?? '-'}</td>
+            <td>${s.media_voto ?? '-'}</td>
+            <td style="color:var(--pitch); font-weight:600">${s.fantamedia ?? '-'}</td>
+            <td>${s.gol ?? '-'}</td><td>${s.assist ?? '-'}</td>
+            <td>${s.ammonizioni ?? '-'}</td><td>${s.espulsioni ?? '-'}</td>
+            <td>${s.gol_subiti ?? '-'}</td><td>${s.rigori_parati ?? '-'}</td>
+            <td>${s.autogol ?? '-'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>` : '<div class="vuoto">Nessuna statistica storica disponibile</div>'}
+    </div>
+  `;
+
+  // Grafico trend fantamedia
+  distruggiChart('chartTrend');
+  if (d.trend_fantamedia.labels.length) {
+    charts['chartTrend'] = new Chart(document.getElementById('chartTrend'), {
+      type: 'line',
+      data: {
+        labels: d.trend_fantamedia.labels,
+        datasets: [{
+          label: 'Fantamedia',
+          data: d.trend_fantamedia.values,
+          borderColor: COLORS[0],
+          backgroundColor: COLORS[0] + '22',
+          tension: 0.3, fill: true, pointRadius: 5,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { y: { beginAtZero: false, grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } }, x: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } } },
+        plugins: { legend: { labels: { color: '#e9ebf0' } } }
+      }
+    });
+  }
+
+  // Radar bonus/malus
+  distruggiChart('chartRadar');
+  charts['chartRadar'] = new Chart(document.getElementById('chartRadar'), {
+    type: 'radar',
+    data: {
+      labels: d.radar_bonus_malus.labels,
+      datasets: [{
+        label: g.nome,
+        data: d.radar_bonus_malus.values,
+        borderColor: COLORS[0],
+        backgroundColor: COLORS[0] + '33',
+        pointBackgroundColor: COLORS[0],
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { r: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0', backdropColor: 'transparent' }, pointLabels: { color: '#868da0', font: { size: 11 } } } },
+      plugins: { legend: { labels: { color: '#e9ebf0' } } }
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CONFRONTO
+// ---------------------------------------------------------------------------
+let confrontoSelezionati = [];
+
+setupAutocomplete('cercaConfronto', 'listaConfronto', g => {
+  if (confrontoSelezionati.length >= 4) return;
+  if (confrontoSelezionati.find(s => s.id === g.id)) return;
+  confrontoSelezionati.push(g);
+  renderTagsConfronto();
+});
+
+function renderTagsConfronto() {
+  const box = document.getElementById('tagsConfronto');
+  box.innerHTML = confrontoSelezionati.map((g, i) => `
+    <span class="tag">
+      ${g.nome} <span class="rm" onclick="rimuoviConfronto(${i})">×</span>
+    </span>
+  `).join('');
+}
+
+function rimuoviConfronto(i) {
+  confrontoSelezionati.splice(i, 1);
+  renderTagsConfronto();
+}
+
+async function caricaConfronto() {
+  if (confrontoSelezionati.length < 2) return alert('Aggiungi almeno 2 giocatori');
+  const ids = confrontoSelezionati.map(g => g.id).join(',');
+  const box = document.getElementById('confrontoContenuto');
+  box.innerHTML = '<div class="vuoto">Caricamento...</div>';
+  try {
+    const res = await fetch(`${API}/confronta?ids=${ids}`);
+    const d = await res.json();
+    renderConfronto(d);
+  } catch(e) {
+    box.innerHTML = `<div class="msg-err">Errore: ${e.message}</div>`;
+  }
+}
+
+function renderConfronto(d) {
+  const box = document.getElementById('confrontoContenuto');
+
+  const opzioniBase = {
+    responsive: true, maintainAspectRatio: false,
+    scales: {
+      y: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } },
+      x: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } }
+    },
+    plugins: { legend: { labels: { color: '#e9ebf0' } } }
+  };
+
+  const buildDatasets = (datasets) => datasets.map((ds, i) => ({
+    ...ds,
+    backgroundColor: COLORS[i % COLORS.length] + '99',
+    borderColor: COLORS[i % COLORS.length],
+    borderWidth: 1,
+  }));
+
+  box.innerHTML = `
+    <div class="panel">
+      <h2>Fantamedia e Media voto</h2>
+      <div class="chart-box"><canvas id="chartConfrontoVoti"></canvas></div>
+    </div>
+    <div class="grid-2">
+      <div class="panel">
+        <h2>Gol · Assist · Ammonizioni</h2>
+        <div class="chart-box"><canvas id="chartConfrontoBonus"></canvas></div>
+      </div>
+      <div class="panel">
+        <h2>Presenze medie</h2>
+        <div class="chart-box"><canvas id="chartConfrontoPresenze"></canvas></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Tabella riepilogo</h2>
+      <table>
+        <thead><tr>
+          <th>Giocatore</th><th>Ruolo</th><th>Squadra</th><th>Quot.</th><th>FVM</th>
+          <th>Fm med.</th><th>Mv med.</th><th>Presenze</th><th>Gol med.</th><th>Ass. med.</th><th>Amm. med.</th><th>Stagioni</th>
+        </tr></thead>
+        <tbody>
+          ${d.giocatori.map(g => `<tr>
+            <td>${g.nome}</td>
+            <td><span class="ruolo-badge">${g.ruolo}</span></td>
+            <td>${g.squadra}</td>
+            <td>${g.quotazione_attuale ?? '-'}</td>
+            <td style="color:var(--pitch)">${g.fvm ?? '-'}</td>
+            <td style="color:var(--pitch); font-weight:600">${g.fantamedia_media ?? '-'}</td>
+            <td>${g.media_voto_media ?? '-'}</td>
+            <td>${g.presenze_media ?? '-'}</td>
+            <td>${g.gol_media ?? '-'}</td>
+            <td>${g.assist_media ?? '-'}</td>
+            <td>${g.ammonizioni_media ?? '-'}</td>
+            <td>${g.stagioni_disponibili}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  // Grafico 1: Fantamedia + Media voto
+  distruggiChart('chartConfrontoVoti');
+  charts['chartConfrontoVoti'] = new Chart(document.getElementById('chartConfrontoVoti'), {
+    type: 'bar',
+    data: { labels: d.chart_voti.labels, datasets: buildDatasets(d.chart_voti.datasets) },
+    options: { ...opzioniBase, scales: { ...opzioniBase.scales, y: { ...opzioniBase.scales.y, min: 0, suggestedMax: 10 } } }
+  });
+
+  // Grafico 2: Gol + Assist + Ammonizioni
+  distruggiChart('chartConfrontoBonus');
+  charts['chartConfrontoBonus'] = new Chart(document.getElementById('chartConfrontoBonus'), {
+    type: 'bar',
+    data: { labels: d.chart_bonus.labels, datasets: buildDatasets(d.chart_bonus.datasets) },
+    options: opzioniBase,
+  });
+
+  // Grafico 3: Presenze
+  distruggiChart('chartConfrontoPresenze');
+  charts['chartConfrontoPresenze'] = new Chart(document.getElementById('chartConfrontoPresenze'), {
+    type: 'bar',
+    data: { labels: d.chart_presenze.labels, datasets: buildDatasets(d.chart_presenze.datasets) },
+    options: { ...opzioniBase, scales: { ...opzioniBase.scales, y: { ...opzioniBase.scales.y, min: 0, max: 38 } } },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// VALORE ATTESO
+// ---------------------------------------------------------------------------
+async function caricaValoreAtteso() {
+  const ruolo = document.getElementById('valoreRuolo').value;
+  const budget = document.getElementById('valoreBudget').value;
+  const box = document.getElementById('valoreContenuto');
+  box.innerHTML = '<div class="vuoto">Caricamento...</div>';
+
+  let url = `${API}/valore-atteso?limit=20`;
+  if (ruolo) url += `&ruolo=${ruolo}`;
+  if (budget) url += `&budget_max=${budget}`;
+
+  try {
+    const res = await fetch(url);
+    const d = await res.json();
+    if (!d.giocatori.length) { box.innerHTML = '<div class="vuoto">Nessun risultato</div>'; return; }
+
+    // Colore score: verde > 70, giallo 40-70, rosso < 40
+    const coloreScore = s => s >= 70 ? 'var(--pitch)' : s >= 40 ? 'var(--amber)' : 'var(--red)';
+    const coloreAff = a => a >= 1 ? 'var(--pitch)' : a >= 0.85 ? 'var(--pitch)' : a >= 0.6 ? 'var(--amber)' : 'var(--red)';
+    const labelAff = a => a >= 1 ? 'Alta' : a >= 0.85 ? 'Buona' : a >= 0.6 ? 'Media' : 'Bassa';
+
+    box.innerHTML = `
+      <div class="panel">
+        <h2>Score opportunità asta</h2>
+        <details style="margin-bottom:16px;">
+          <summary style="font-size:12px; color:var(--muted); cursor:pointer; user-select:none;">
+            Come funziona lo score ▸
+          </summary>
+          <div style="margin-top:12px; font-size:12px; color:var(--muted); line-height:1.8; border-left: 2px solid var(--line); padding-left:14px;">
+
+            <strong style="color:var(--text); display:block; margin-bottom:4px;">Formula</strong>
+            <code style="color:var(--pitch); background:var(--panel-2); padding:6px 10px; border-radius:4px; display:block; margin-bottom:12px;">
+              score = ( FVM_norm × 0.60 + FM_pond_norm × 0.40 ) × affidabilità × 100
+            </code>
+
+            <strong style="color:var(--text); display:block; margin-bottom:4px;">FVM_norm (60%)</strong>
+            FVM della stagione corrente del giocatore, diviso per il FVM massimo tra tutti i giocatori
+            dello stesso ruolo ancora liberi. Rappresenta il valore atteso dalla piattaforma
+            per la stagione in corso. Normalizzato per ruolo: un portiere viene confrontato
+            solo con altri portieri, non con gli attaccanti.<br><br>
+
+            <strong style="color:var(--text); display:block; margin-bottom:4px;">FM_pond_norm (40%)</strong>
+            Fantamedia ponderata sulle ultime 4 stagioni disponibili, con pesi decrescenti:<br>
+            <code style="color:var(--amber); background:var(--panel-2); padding:4px 8px; border-radius:4px; display:inline-block; margin:4px 0 8px;">
+              stagione più recente × 3 &nbsp;·&nbsp; penultima × 2 &nbsp;·&nbsp; terzultima × 1 &nbsp;·&nbsp; quartultima × 0.5
+            </code><br>
+            Il risultato viene normalizzato 0–1 rispetto al massimo del ruolo.
+            Chi non ha stagioni storiche ottiene FM_pond_norm = 0.<br><br>
+
+            <strong style="color:var(--text); display:block; margin-bottom:4px;">Affidabilità (moltiplicatore)</strong>
+            Basata sulle presenze medie ponderate (stessi pesi della fantamedia).
+            Penalizza chi ha poche presenze: una fantamedia alta su 3 partite non è statistica affidabile.<br>
+            <table style="margin-top:6px; font-size:11px; border-collapse:collapse;">
+              <tr><td style="padding:3px 12px 3px 0; color:var(--pitch)">≥ 28 presenze medie</td><td>× 1.00 — Alta</td></tr>
+              <tr><td style="padding:3px 12px 3px 0; color:var(--amber)">20–27 presenze medie</td><td>× 0.85 — Buona</td></tr>
+              <tr><td style="padding:3px 12px 3px 0; color:var(--amber)">10–19 presenze medie</td><td>× 0.60 — Media</td></tr>
+              <tr><td style="padding:3px 12px 3px 0; color:var(--red)">< 10 presenze medie</td><td>× 0.30 — Bassa</td></tr>
+            </table><br>
+
+            <strong style="color:var(--text); display:block; margin-bottom:4px;">Lettura del risultato</strong>
+            <span style="color:var(--pitch)">Score ≥ 70</span> — ottima opportunità &nbsp;·&nbsp;
+            <span style="color:var(--amber)">40–69</span> — discreta &nbsp;·&nbsp;
+            <span style="color:var(--red)">&lt; 40</span> — profilo debole o dati insufficienti<br><br>
+
+            <em>Nota: lo score è relativo al ruolo e ai giocatori attualmente liberi —
+            cambia man mano che i giocatori vengono acquistati all'asta.</em>
+          </div>
+        </details>
+        <table>
+          <thead><tr>
+            <th>#</th><th>Giocatore</th><th>Ruolo</th><th>Squadra</th>
+            <th>Quot.</th><th>FVM</th><th>Fm pond.</th><th>Pres. medie</th>
+            <th>Affidabilità</th><th>Stagioni</th><th>Score</th>
+          </tr></thead>
+          <tbody>
+            ${d.giocatori.map((g, i) => `<tr>
+              <td>${i+1}</td>
+              <td style="cursor:pointer; color:var(--pitch)" onclick="caricaScheda(${g.id},'${g.nome}'); mostraSezione('scheda', document.querySelector('.tab'))">${g.nome}</td>
+              <td><span class="ruolo-badge">${g.ruolo}</span></td>
+              <td>${g.squadra}</td>
+              <td>${g.quotazione_attuale}</td>
+              <td>${g.fvm ?? '-'}</td>
+              <td>${g.fantamedia_ponderata ?? '-'}</td>
+              <td>${g.presenze_medie_pond ?? '-'}</td>
+              <td style="color:${coloreAff(g.affidabilita)}; font-weight:600">${labelAff(g.affidabilita)}</td>
+              <td>${g.n_stagioni}</td>
+              <td style="color:${coloreScore(g.score)}; font-weight:700; font-size:15px">${g.score ?? '-'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch(e) {
+    box.innerHTML = `<div class="msg-err">Errore: ${e.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// TENDENZA MERCATO
+// ---------------------------------------------------------------------------
+async function caricaMercato() {
+  const box = document.getElementById('mercatoContenuto');
+  try {
+    const res = await fetch(`${API}/tendenza-mercato`);
+    const d = await res.json();
+    if (!d.per_ruolo.length) { box.innerHTML = '<div class="vuoto">Nessun acquisto registrato ancora</div>'; return; }
+
+    const coloreRapporto = c => c === 'green' ? 'var(--pitch)' : c === 'red' ? 'var(--red)' : 'var(--amber)';
+    const coloreRapportoHex = c => c === 'green' ? '#2f9e5e' : c === 'red' ? '#e0524f' : '#e0a339';
+    const emoji = c => c === 'green' ? '🟢' : c === 'red' ? '🔴' : '🟡';
+
+    box.innerHTML = `
+      <div class="panel">
+        <h2>Come leggere questa sezione</h2>
+        <p style="font-size:13px; color:var(--muted); line-height:1.7; margin:0">
+          Il <strong style="color:var(--text)">FVM (Fantavalore di Mercato)</strong> è il valore teorico di ogni giocatore
+          calcolato da Fantacalcio.it, già normalizzato al budget della tua lega (<strong style="color:var(--pitch)">${d.budget_lega} crediti</strong>).<br><br>
+          Il <strong style="color:var(--text)">rapporto prezzo/FVM</strong> indica quanto il mercato sta pagando
+          rispetto al valore atteso: <span style="color:var(--pitch)">sotto 0.85 = occasioni</span>,
+          <span style="color:var(--amber)">tra 0.85 e 1.15 = in linea</span>,
+          <span style="color:var(--red)">sopra 1.15 = ruolo gonfiato</span>.
+        </p>
+      </div>
+      <div class="panel">
+        <h2>Sintesi per ruolo</h2>
+        ${d.per_ruolo.map(r => `
+          <div style="margin-bottom:14px; padding:12px; background:var(--panel-2); border-radius:6px; border-left: 3px solid ${coloreRapporto(r.colore)}">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
+              <span style="font-weight:600">${emoji(r.colore)} ${r.etichetta_ruolo}</span>
+              <span style="font-family:var(--mono); font-size:12px; color:var(--muted)">${r.acquisti} acquisti · prezzo medio <strong style="color:var(--text)">${r.prezzo_medio_pagato}</strong> · FVM medio <strong style="color:var(--text)">${r.fvm_medio_norm}</strong></span>
+            </div>
+            <div style="font-size:13px; color:var(--muted); margin-top:6px">${r.valutazione}</div>
+          </div>
+        `).join('')}
+      </div>
+      <div class="panel">
+        <h2>Prezzo medio pagato vs FVM medio</h2>
+        <div class="chart-box"><canvas id="chartMercato"></canvas></div>
+      </div>
+      <div class="panel">
+        <h2>Rapporto prezzo / FVM per ruolo (1.0 = perfettamente in linea)</h2>
+        <div class="chart-box"><canvas id="chartRapporto"></canvas></div>
+      </div>
+      <div class="panel">
+        <h2>Tabella dettaglio</h2>
+        <table>
+          <thead><tr>
+            <th>Ruolo</th><th>Acquisti</th><th>Prezzo medio</th><th>FVM medio</th>
+            <th>Fm storica media</th><th>Rapporto P/FVM</th>
+          </tr></thead>
+          <tbody>
+            ${d.per_ruolo.map(r => `<tr>
+              <td><span class="ruolo-badge">${r.ruolo}</span></td>
+              <td>${r.acquisti}</td>
+              <td>${r.prezzo_medio_pagato}</td>
+              <td style="color:var(--pitch)">${r.fvm_medio_norm}</td>
+              <td>${r.fantamedia_storica_media ?? '-'}</td>
+              <td style="font-weight:600; color:${coloreRapporto(r.colore)}">${r.rapporto_prezzo_fvm_norm ?? '-'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    distruggiChart('chartMercato');
+    charts['chartMercato'] = new Chart(document.getElementById('chartMercato'), {
+      type: 'bar',
+      data: {
+        labels: d.chart_prezzi.labels,
+        datasets: d.chart_prezzi.datasets.map((ds, i) => ({
+          ...ds, backgroundColor: COLORS[i] + '99', borderColor: COLORS[i], borderWidth: 1,
+        }))
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { y: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } }, x: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } } },
+        plugins: { legend: { labels: { color: '#e9ebf0' } } }
+      }
+    });
+
+    // Grafico rapporto con linea di riferimento a 1.0
+    distruggiChart('chartRapporto');
+    charts['chartRapporto'] = new Chart(document.getElementById('chartRapporto'), {
+      type: 'bar',
+      data: {
+        labels: d.chart_rapporto.labels,
+        datasets: [
+          {
+            label: 'Rapporto prezzo / FVM',
+            data: d.chart_rapporto.datasets[0].data,
+            backgroundColor: d.per_ruolo.map(r => coloreRapportoHex(r.colore) + '99'),
+            borderColor: d.per_ruolo.map(r => coloreRapportoHex(r.colore)),
+            borderWidth: 1,
+          }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          y: {
+            grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' },
+            // Linea di riferimento a 1.0
+            afterDataLimits: scale => { scale.min = 0; scale.max = Math.max(scale.max, 1.3); }
+          },
+          x: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } }
+        },
+        plugins: {
+          legend: { labels: { color: '#e9ebf0' } },
+          annotation: {
+            annotations: {
+              linea: { type: 'line', yMin: 1, yMax: 1, borderColor: 'rgba(255,255,255,0.3)', borderWidth: 1, borderDash: [4,4], label: { content: 'in linea', display: true, color: '#868da0', font: { size: 10 } } }
+            }
+          }
+        }
+      }
+    });
+  } catch(e) {
+    box.innerHTML = `<div class="msg-err">Errore: ${e.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MIA ROSA
+// ---------------------------------------------------------------------------
+async function caricaRosa() {
+  const box = document.getElementById('rosaContenuto');
+  try {
+    const res = await fetch(`${API}/mia-rosa/rendimento`);
+    const d = await res.json();
+    if (!d.rosa.length) { box.innerHTML = '<div class="vuoto">Nessun giocatore in rosa</div>'; return; }
+
+    const haVoti = d.chart_trend.labels.length > 0;
+
+    box.innerHTML = `
+      ${haVoti ? `
+      <div class="panel">
+        <h2>Trend fantavoto stagione corrente</h2>
+        <div class="chart-box-tall"><canvas id="chartRosaTrend"></canvas></div>
+      </div>` : ''}
+      <div class="panel">
+        <h2>Rosa — fantamedia storica</h2>
+        <table>
+          <thead><tr>
+            <th>Giocatore</th><th>Ruolo</th><th>Squadra</th>
+            <th>Prezzo pagato</th><th>Fm storica</th>
+          </tr></thead>
+          <tbody>
+            ${d.rosa.map(g => `<tr>
+              <td style="cursor:pointer; color:var(--pitch)" onclick="caricaScheda(${g.id},'${g.nome}'); mostraSezione('scheda', document.querySelector('.tab'))">${g.nome}</td>
+              <td><span class="ruolo-badge">${g.ruolo}</span></td>
+              <td>${g.squadra}</td>
+              <td>${g.prezzo_pagato ?? '-'}</td>
+              <td style="color:var(--pitch); font-weight:600">${g.fantamedia_storica ?? '-'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    if (haVoti) {
+      distruggiChart('chartRosaTrend');
+      charts['chartRosaTrend'] = new Chart(document.getElementById('chartRosaTrend'), {
+        type: 'line',
+        data: {
+          labels: d.chart_trend.labels,
+          datasets: d.chart_trend.datasets.map((ds, i) => ({
+            ...ds,
+            borderColor: COLORS[i % COLORS.length],
+            backgroundColor: 'transparent',
+            tension: 0.3, pointRadius: 4,
+            spanGaps: true,
+          }))
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          scales: { y: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } }, x: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } } },
+          plugins: { legend: { labels: { color: '#e9ebf0', font: { size: 11 } } } }
+        }
+      });
+    }
+  } catch(e) {
+    box.innerHTML = `<div class="msg-err">Errore: ${e.message}</div>`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CLASSIFICA LEGA
+// ---------------------------------------------------------------------------
+async function caricaLega() {
+  const box = document.getElementById('legaContenuto');
+  try {
+    const res = await fetch(`${API}/classifica-lega`);
+    const d = await res.json();
+    if (!d.classifica.length) { box.innerHTML = '<div class="vuoto">Nessun dato disponibile — popola voti_giornata</div>'; return; }
+
+    box.innerHTML = `
+      <div class="panel">
+        <h2>Classifica punti totali</h2>
+        <div class="chart-box-tall"><canvas id="chartLega"></canvas></div>
+      </div>
+      <div class="panel">
+        <h2>Tabella classifica</h2>
+        <table>
+          <thead><tr>
+            <th>#</th><th>Squadra</th><th>Giornate</th><th>Punti totali</th><th>Fantamedia squadra</th>
+          </tr></thead>
+          <tbody>
+            ${d.classifica.map((r, i) => `<tr>
+              <td>${i+1}</td>
+              <td>${r.squadra}</td>
+              <td>${r.giornate_giocate}</td>
+              <td style="color:var(--pitch); font-weight:600">${r.punti_totali}</td>
+              <td>${r.fantamedia_squadra}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    distruggiChart('chartLega');
+    charts['chartLega'] = new Chart(document.getElementById('chartLega'), {
+      type: 'bar',
+      indexAxis: 'y',
+      data: {
+        labels: d.chart.labels,
+        datasets: d.chart.datasets.map((ds, i) => ({
+          ...ds, backgroundColor: COLORS[i % COLORS.length] + '99',
+          borderColor: COLORS[i % COLORS.length], borderWidth: 1,
+        }))
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { x: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } }, y: { grid: { color: '#2a2f3d' }, ticks: { color: '#868da0' } } },
+        plugins: { legend: { labels: { color: '#e9ebf0' } } }
+      }
+    });
+  } catch(e) {
+    box.innerHTML = `<div class="msg-err">Errore: ${e.message}</div>`;
+  }
+}
+</script>
+</body>
+</html>
